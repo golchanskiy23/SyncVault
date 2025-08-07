@@ -13,8 +13,10 @@ import (
 )
 
 func main() {
-	// Добавить обработку возможных ошибок при создании приложения
-	application := app.New()
+	application, err := app.New()
+	if err != nil {
+		log.Fatalf("Failed to create application: %v", err)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -35,9 +37,9 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer shutdownCancel()
 
-	// Разве здесь не нужно выходить из main, при ошибке?
 	if err := application.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error during shutdown: %v", err)
+		os.Exit(1)
 	}
 
 	wg.Wait()
