@@ -24,19 +24,6 @@ type Config struct {
 	// Другие секции для Kafka, NATS, БД и т.д.
 }
 
-func Default() *Config {
-	cfg := &Config{}
-
-	cfg.HTTP.Host = ""
-	cfg.HTTP.Port = 8080
-	cfg.HTTP.ReadTimeout = 15 * time.Second
-	cfg.HTTP.WriteTimeout = 15 * time.Second
-	cfg.HTTP.IdleTimeout = 60 * time.Second
-	cfg.Shutdown.Timeout = 30 * time.Second
-
-	return cfg
-}
-
 func (c *Config) Address() string {
 	if c.HTTP.Host == "" {
 		return fmt.Sprintf(":%d", c.HTTP.Port)

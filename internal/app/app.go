@@ -27,7 +27,7 @@ func New(opts ...Option) (*App, error) {
 	app := &App{
 		ctx:    ctx,
 		cancel: cancel,
-		config: config.Default(),
+		config: &config.Config{},
 	}
 
 	for _, opt := range opts {
