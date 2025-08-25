@@ -8,12 +8,6 @@ import (
 	"syncvault/internal/domain/valueobjects"
 )
 
-type FileUseCase interface {
-	SyncFile(ctx context.Context, fileID valueobjects.FileID, sourceNode, targetNode valueobjects.StorageNodeID) error
-	GetFileStatus(ctx context.Context, fileID valueobjects.FileID) (*entities.FileObject, error)
-	ListFiles(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.FileObject, error)
-}
-
 type ConflictResolutionUseCase interface {
 	DetectConflicts(ctx context.Context, syncJobID valueobjects.SyncJobID) ([]*entities.Conflict, error)
 	ResolveConflict(ctx context.Context, conflictID valueobjects.ConflictID, resolution entities.ConflictResolution) error
