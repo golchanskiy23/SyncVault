@@ -8,11 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
 	"syncvault/internal/config"
 )
 
 type App struct {
 	httpServer *http.Server
+	router     chi.Router
+	server     *http.Server
 	wg         sync.WaitGroup
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -28,6 +33,7 @@ func New(opts ...Option) (*App, error) {
 		ctx:    ctx,
 		cancel: cancel,
 		config: &config.Config{},
+		router: chi.NewRouter(),
 	}
 
 	for _, opt := range opts {
@@ -43,9 +49,13 @@ func New(opts ...Option) (*App, error) {
 func (a *App) Run(ctx context.Context) error {
 	log.Println("Starting application...")
 
+	a.setupMiddleware()
+	a.setupRoutes()
+
 	if a.httpServer == nil {
 		a.httpServer = &http.Server{
 			Addr:         a.config.Address(),
+			Handler:      a.router,
 			ReadTimeout:  a.config.HTTP.ReadTimeout,
 			WriteTimeout: a.config.HTTP.WriteTimeout,
 			IdleTimeout:  a.config.HTTP.IdleTimeout,
@@ -79,6 +89,11 @@ func (a *App) Run(ctx context.Context) error {
 	// a.startBackgroundServices()
 
 	log.Println("Application started successfully")
+	log.Printf("📚 API Documentation:")
+	log.Printf(" 🌐 Public API: http://localhost:8080/api/v1/")
+	log.Printf(" 🔧 Internal API: http://localhost:8080/internal/")
+	log.Printf(" ❤️ Health Check: http://localhost:8080/api/v1/health")
+	log.Printf(" 🏓 Ping: http://localhost:8080/api/v1/ping")
 
 	<-a.ctx.Done()
 	log.Println("Application context cancelled, exiting Run()")
@@ -129,46 +144,286 @@ func (a *App) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-/*
-func (a *App) startBackgroundServices() {
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
+func (a *App) setupMiddleware() {
+	a.router.Use(middleware.RequestID)
+	a.router.Use(middleware.RealIP)
+	a.router.Use(middleware.Logger)
+	a.router.Use(middleware.Recoverer)
+	a.router.Use(middleware.Timeout(60 * time.Second))
+	a.router.Use(middleware.AllowContentType("application/json"))
 
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
+	a.router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		for {
-			select {
-			case <-a.ctx.Done():
-				log.Println("Background service: context cancelled, stopping...")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
 				return
-			case <-ticker.C:
-				log.Println("Background service: performing periodic task")
 			}
-		}
-	}()
 
-	log.Println("Background services started")
+			next.ServeHTTP(w, r)
+		})
+	})
 }
 
+func (a *App) setupRoutes() {
+	a.router.Route("/api/v1", func(r chi.Router) {
+		r.Get("/health", a.handleHealth)
+		r.Get("/ping", a.handlePing)
+
+		r.Route("/files", func(r chi.Router) {
+			r.Get("/", a.handleListFiles)
+			r.Post("/", a.handleCreateFile)
+			r.Get("/{fileID}", a.handleGetFile)
+			r.Put("/{fileID}", a.handleUpdateFile)
+			r.Delete("/{fileID}", a.handleDeleteFile)
+		})
+
+		r.Route("/sync", func(r chi.Router) {
+			r.Post("/jobs", a.handleCreateSyncJob)
+			r.Get("/jobs/{jobID}", a.handleGetSyncJob)
+			r.Post("/jobs/{jobID}/start", a.handleStartSyncJob)
+			r.Post("/jobs/{jobID}/cancel", a.handleCancelSyncJob)
+		})
+
+		r.Route("/nodes", func(r chi.Router) {
+			r.Get("/", a.handleListNodes)
+			r.Post("/", a.handleCreateNode)
+			r.Get("/{nodeID}", a.handleGetNode)
+			r.Put("/{nodeID}/status", a.handleUpdateNodeStatus)
+		})
+
+		r.Route("/conflicts", func(r chi.Router) {
+			r.Get("/", a.handleListConflicts)
+			r.Post("/{conflictID}/resolve", a.handleResolveConflict)
+		})
+	})
+
+	a.router.Route("/internal", func(r chi.Router) {
+		r.Use(a.internalAuthMiddleware)
+
+		r.Route("/sync", func(r chi.Router) {
+			r.Post("/coordinate", a.handleSyncCoordination)
+			r.Get("/status/{nodeID}", a.handleNodeSyncStatus)
+			r.Post("/heartbeat", a.handleNodeHeartbeat)
+		})
+
+		r.Route("/events", func(r chi.Router) {
+			r.Get("/stream", a.handleEventStream)
+			r.Post("/publish", a.handlePublishEvent)
+		})
+
+		r.Route("/health", func(r chi.Router) {
+			r.Get("/readiness", a.handleReadinessCheck)
+			r.Get("/liveness", a.handleLivenessCheck)
+		})
+	})
+}
+
+func (a *App) internalAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		internalToken := r.Header.Get("X-Internal-Token")
+		if internalToken != a.getInternalToken() {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *App) getInternalToken() string {
+	return "syncvault-internal-token"
+}
+
+func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"healthy","service":"syncvault"}`))
+}
+
+func (a *App) handlePing(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"pong"}`))
+}
+
+func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`[{"id":"file1","path":"/documents/report.pdf","size":1024}]`))
+}
+
+func (a *App) handleCreateFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"id":"new-file-id","path":"/documents/new.pdf","size":2048}`))
+}
+
+func (a *App) handleGetFile(w http.ResponseWriter, r *http.Request) {
+	fileID := chi.URLParam(r, "fileID")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"id":"` + fileID + `","path":"/documents/report.pdf","size":1024,"status":"synced"}`))
+}
+
+func (a *App) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"File updated successfully"}`))
+}
+
+func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"File deleted successfully"}`))
+}
+
+func (a *App) handleCreateSyncJob(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"id":"new-sync-job-id","status":"pending","createdAt":"2026-03-15T14:57:00Z"}`))
+}
+
+func (a *App) handleGetSyncJob(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"id":"job123","status":"running","progress":50,"total":100}`))
+}
+
+func (a *App) handleStartSyncJob(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Sync job started","status":"running"}`))
+}
+
+func (a *App) handleCancelSyncJob(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Sync job cancelled","status":"cancelled"}`))
+}
+
+func (a *App) handleListNodes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`[{"id":"node1","name":"Local Storage","type":"local","status":"online"}]`))
+}
+
+func (a *App) handleCreateNode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"id":"new-node-id","name":"New Storage","type":"cloud","status":"offline"}`))
+}
+
+func (a *App) handleGetNode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"id":"node123","name":"Local Storage","type":"local","status":"online","capacity":1000000000,"usedSpace":500000000}`))
+}
+
+func (a *App) handleUpdateNodeStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Node status updated"}`))
+}
+
+func (a *App) handleListConflicts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`[{"id":"conflict1","fileID":"file1","conflictType":"content","resolved":false}]`))
+}
+
+func (a *App) handleResolveConflict(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Conflict resolved","resolved":true}`))
+}
+
+func (a *App) handleSyncCoordination(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Sync coordination completed","status":"success"}`))
+}
+
+func (a *App) handleNodeSyncStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"syncStatus":"in_progress","pendingFiles":5,"failedFiles":1}`))
+}
+
+func (a *App) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Heartbeat received","status":"alive"}`))
+}
+
+func (a *App) handleEventStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	event := "data: {\"type\":\"file_synced\",\"fileID\":\"file1\",\"timestamp\":\"2026-03-15T14:57:00Z\"}\n\n"
+	w.Write([]byte(event))
+}
+
+func (a *App) handlePublishEvent(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Event published","status":"success"}`))
+}
+
+func (a *App) handleReadinessCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ready","checks":{"database":"ok","storage":"ok","cache":"ok"}}`))
+}
+
+func (a *App) handleLivenessCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"alive","timestamp":"2026-03-15T14:57:00Z","uptime":"2h30m15s"}`))
+}
+
+/*
+func (a *App) startBackgroundServices() {
+a.wg.Add(1)
+go func() {
+defer a.wg.Done()
+
+ticker := time.NewTicker(30 * time.Second)
+defer ticker.Stop()
+
+for {
+select {
+case <-a.ctx.Done():
+log.Println("Background service: context cancelled, stopping...")
+return
+case <-ticker.C:
+log.Println("Background service: performing periodic task")
+}
+}
+}()
+
+log.Println("Background services started")
+}
 
 func (a *App) shutdownBackgroundServices(ctx context.Context) {
-	log.Println("Shutting down background services...")
+log.Println("Shutting down background services...")
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		time.Sleep(2 * time.Second)
-		close(done)
-	}()
+done := make(chan struct{})
+go func() {
+time.Sleep(2 * time.Second)
+close(done)
+}()
 
-	select {
-	case <-done:
-		log.Println("Background services shutdown completed")
-	case <-shutdownCtx.Done():
-		log.Println("Background services shutdown timeout")
-	}
+select {
+case <-done:
+log.Println("Background services shutdown completed")
+case <-shutdownCtx.Done():
+log.Println("Background services shutdown timeout")
+}
 }*/
