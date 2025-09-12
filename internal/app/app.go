@@ -182,17 +182,24 @@ func (a *App) setupRoutes() {
 		})
 
 		r.Route("/sync", func(r chi.Router) {
-			r.Post("/jobs", a.handleCreateSyncJob)
+			r.Post("/start", a.handleStartSync)
+			r.Post("/stop", a.handleStopSync)
+			r.Get("/status", a.handleGetSyncStatus)
+			r.Get("/jobs", a.handleListSyncJobs)
 			r.Get("/jobs/{jobID}", a.handleGetSyncJob)
-			r.Post("/jobs/{jobID}/start", a.handleStartSyncJob)
 			r.Post("/jobs/{jobID}/cancel", a.handleCancelSyncJob)
 		})
 
-		r.Route("/nodes", func(r chi.Router) {
-			r.Get("/", a.handleListNodes)
-			r.Post("/", a.handleCreateNode)
-			r.Get("/{nodeID}", a.handleGetNode)
-			r.Put("/{nodeID}/status", a.handleUpdateNodeStatus)
+		r.Route("/storages", func(r chi.Router) {
+			r.Get("/", a.handleListStorages)
+			r.Post("/", a.handleCreateStorage)
+			r.Get("/{storageID}", a.handleGetStorage)
+			r.Put("/{storageID}", a.handleUpdateStorage)
+			r.Delete("/{storageID}", a.handleDeleteStorage)
+			r.Post("/{storageID}/connect", a.handleConnectStorage)
+			r.Post("/{storageID}/disconnect", a.handleDisconnectStorage)
+			r.Get("/{storageID}/status", a.handleGetStorageStatus)
+			r.Get("/{storageID}/usage", a.handleGetStorageUsage)
 		})
 
 		r.Route("/conflicts", func(r chi.Router) {
@@ -383,6 +390,86 @@ func (a *App) handleLivenessCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"alive","timestamp":"2026-03-15T14:57:00Z","uptime":"2h30m15s"}`))
+}
+
+// Sync Management Handlers
+func (a *App) handleStartSync(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"job_id":"sync-job-123","node_id":"local-storage","status":"started","created_at":"2026-03-15T14:57:00Z"}`))
+}
+
+func (a *App) handleStopSync(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Sync stopped","status":"stopped"}`))
+}
+
+func (a *App) handleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"running","active_jobs":3,"completed_jobs":125,"failed_jobs":2,"files_processed":1500,"files_total":2000,"last_sync_at":"2026-03-15T14:55:00Z"}`))
+}
+
+func (a *App) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`[{"id":"job-1","node_id":"local","status":"running","progress":75},{"id":"job-2","node_id":"cloud","status":"completed","progress":100}]`))
+}
+
+// Storage Management Handlers
+func (a *App) handleListStorages(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`[{"id":"storage-1","name":"Local Storage","type":"local","status":"connected","capacity":1000000000000,"used":500000000000},{"id":"storage-2","name":"Cloud Storage","type":"s3","status":"connected","capacity":10000000000000,"used":2000000000000}]`))
+}
+
+func (a *App) handleCreateStorage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"id":"storage-3","name":"New Storage","type":"ftp","status":"disconnected","capacity":0,"used":0,"created_at":"2026-03-15T14:57:00Z"}`))
+}
+
+func (a *App) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	storageID := chi.URLParam(r, "storageID")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"id":"` + storageID + `","name":"Local Storage","type":"local","status":"connected","capacity":1000000000000,"used":500000000000,"config":{"path":"/syncvault/data"}}`))
+}
+
+func (a *App) handleUpdateStorage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Storage updated successfully"}`))
+}
+
+func (a *App) handleDeleteStorage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) handleConnectStorage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Storage connected successfully","status":"connected"}`))
+}
+
+func (a *App) handleDisconnectStorage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"message":"Storage disconnected successfully","status":"disconnected"}`))
+}
+
+func (a *App) handleGetStorageStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"storage_id":"storage-1","status":"connected","last_check":"2026-03-15T14:57:00Z","latency_ms":15,"error_count":0,"uptime":"99.9%"}`))
+}
+
+func (a *App) handleGetStorageUsage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"storage_id":"storage-1","total_bytes":1000000000000,"used_bytes":500000000000,"available_bytes":500000000000,"file_count":15000,"usage_percent":50.0}`))
 }
 
 /*
