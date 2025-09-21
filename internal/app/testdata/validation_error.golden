@@ -1,0 +1,10 @@
+{
+  "error": "Validation failed",
+  "message": "Invalid request parameters",
+  "details": [
+    {
+      "field": "path",
+      "message": "Path is required"
+    }
+  ]
+}
