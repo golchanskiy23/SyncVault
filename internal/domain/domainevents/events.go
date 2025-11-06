@@ -15,13 +15,13 @@ type DomainEvent interface {
 }
 
 type FileCreated struct {
-	eventID     string
-	occurredAt  time.Time
-	fileID      valueobjects.FileID
-	nodeID      valueobjects.StorageNodeID
-	filePath    valueobjects.FilePath
-	fileHash    valueobjects.FileHash
-	fileSize    int64
+	eventID    string
+	occurredAt time.Time
+	fileID     valueobjects.FileID
+	nodeID     valueobjects.StorageNodeID
+	filePath   valueobjects.FilePath
+	fileHash   valueobjects.FileHash
+	fileSize   int64
 }
 
 func NewFileCreated(
@@ -79,13 +79,13 @@ func (e *FileCreated) FileSize() int64 {
 }
 
 type FileSynced struct {
-	eventID     string
-	occurredAt  time.Time
-	fileID      valueobjects.FileID
-	sourceNode  valueobjects.StorageNodeID
-	targetNode  valueobjects.StorageNodeID
-	syncJobID   valueobjects.SyncJobID
-	filePath    valueobjects.FilePath
+	eventID    string
+	occurredAt time.Time
+	fileID     valueobjects.FileID
+	sourceNode valueobjects.StorageNodeID
+	targetNode valueobjects.StorageNodeID
+	syncJobID  valueobjects.SyncJobID
+	filePath   valueobjects.FilePath
 }
 
 func NewFileSynced(
@@ -150,8 +150,8 @@ type ConflictDetected struct {
 	targetNode   valueobjects.StorageNodeID
 	conflictType entities.ConflictType
 	description  string
-	sourceFile   *entities.FileObject
-	targetFile   *entities.FileObject
+	sourceFile   *entities.File
+	targetFile   *entities.File
 }
 
 func NewConflictDetected(
@@ -160,7 +160,7 @@ func NewConflictDetected(
 	sourceNode, targetNode valueobjects.StorageNodeID,
 	conflictType entities.ConflictType,
 	description string,
-	sourceFile, targetFile *entities.FileObject,
+	sourceFile, targetFile *entities.File,
 ) *ConflictDetected {
 	return &ConflictDetected{
 		eventID:      valueobjects.NewFileID().String(),
@@ -216,24 +216,24 @@ func (e *ConflictDetected) Description() string {
 	return e.description
 }
 
-func (e *ConflictDetected) SourceFile() *entities.FileObject {
+func (e *ConflictDetected) SourceFile() *entities.File {
 	return e.sourceFile
 }
 
-func (e *ConflictDetected) TargetFile() *entities.FileObject {
+func (e *ConflictDetected) TargetFile() *entities.File {
 	return e.targetFile
 }
 
 type SyncJobCompleted struct {
-	eventID     string
-	occurredAt  time.Time
-	syncJobID   valueobjects.SyncJobID
-	sourceNode  valueobjects.StorageNodeID
-	targetNode  valueobjects.StorageNodeID
-	status      string
-	totalFiles  int
-	successful  int
-	failed      int
+	eventID    string
+	occurredAt time.Time
+	syncJobID  valueobjects.SyncJobID
+	sourceNode valueobjects.StorageNodeID
+	targetNode valueobjects.StorageNodeID
+	status     string
+	totalFiles int
+	successful int
+	failed     int
 }
 
 func NewSyncJobCompleted(

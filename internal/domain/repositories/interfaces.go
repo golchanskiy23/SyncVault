@@ -9,11 +9,11 @@ import (
 )
 
 type FileRepository interface {
-	Save(ctx context.Context, file *entities.FileObject) error
-	FindByID(ctx context.Context, id valueobjects.FileID) (*entities.FileObject, error)
-	FindByPath(ctx context.Context, nodeID valueobjects.StorageNodeID, path valueobjects.FilePath) (*entities.FileObject, error)
-	FindByNode(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.FileObject, error)
-	FindModifiedSince(ctx context.Context, nodeID valueobjects.StorageNodeID, since time.Time) ([]*entities.FileObject, error)
+	Save(ctx context.Context, file *entities.File) error
+	FindByID(ctx context.Context, id valueobjects.FileID) (*entities.File, error)
+	FindByPath(ctx context.Context, nodeID valueobjects.StorageNodeID, path valueobjects.FilePath) (*entities.File, error)
+	FindByNode(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.File, error)
+	FindModifiedSince(ctx context.Context, nodeID valueobjects.StorageNodeID, since time.Time) ([]*entities.File, error)
 	Delete(ctx context.Context, id valueobjects.FileID) error
 	Exists(ctx context.Context, nodeID valueobjects.StorageNodeID, path valueobjects.FilePath) (bool, error)
 }

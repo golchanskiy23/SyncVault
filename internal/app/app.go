@@ -15,21 +15,28 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"syncvault/docs"
+	"syncvault/internal/app/handlers"
 	"syncvault/internal/config"
 	"syncvault/internal/db"
+	"syncvault/internal/domain/ports"
+	"syncvault/internal/domain/services"
+	"syncvault/internal/infrastructure/database"
 )
 
 type App struct {
-	httpServer *http.Server
-	router     chi.Router
-	server     *http.Server
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
-	shutdown   bool
-	mu         sync.RWMutex
-	config     *config.Config
-	db         *pgxpool.Pool
+	httpServer  *http.Server
+	router      chi.Router
+	server      *http.Server
+	wg          sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
+	shutdown    bool
+	mu          sync.RWMutex
+	config      *config.Config
+	db          *pgxpool.Pool
+	fileRepo    ports.FileRepository
+	fileService *services.FileService
+	fileHandler *handlers.FileHandler
 }
 
 func New(opts ...Option) (*App, error) {
@@ -42,20 +49,35 @@ func New(opts ...Option) (*App, error) {
 		router: chi.NewRouter(),
 	}
 
+	// Apply options
 	for _, opt := range opts {
-		if err := opt(app); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to apply option: %w", err)
-		}
+		opt(app)
 	}
 
-	// Инициализируем подключение к базе данных для тестов
+	// Initialize database connection
 	if err := app.connectDB(); err != nil {
-		cancel()
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
+	// Set up Hexagonal Architecture dependencies
+	app.setupDependencies()
+
+	// Set up middleware and routes
+	app.setupMiddleware()
+	app.setupRoutes()
+
 	return app, nil
+}
+
+func (a *App) setupDependencies() {
+	// Create repository (Infrastructure layer)
+	a.fileRepo = database.NewFileRepository(a.db)
+
+	// Create service (Domain layer)
+	a.fileService = services.NewFileService(a.fileRepo, nil) // Storage can be nil for now
+
+	// Create handler (Application layer)
+	a.fileHandler = handlers.NewFileHandler(a.fileService)
 }
 
 // connectDB подключается к базе данных
@@ -91,8 +113,8 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	a.setupMiddleware()
-	a.setupRoutes()
+	//a.setupMiddleware()
+	//a.setupRoutes()
 
 	if a.httpServer == nil {
 		a.httpServer = &http.Server{
@@ -137,8 +159,8 @@ func (a *App) Run(ctx context.Context) error {
 	log.Printf("   ❤️  Health Check: http://localhost:8080/api/v1/health")
 	log.Printf("   🏓 Ping: http://localhost:8080/api/v1/ping")
 	log.Printf("   📖 Swagger UI: http://localhost:8080/swagger/index.html")
-	log.Printf("   � Swagger UI: http://localhost:8080/swagger-ui")
-	log.Printf("   �📚 Custom Docs: http://localhost:8080/docs")
+	log.Printf("   🔍 Swagger UI: http://localhost:8080/swagger-ui")
+	log.Printf("   📚 Custom Docs: http://localhost:8080/docs")
 	log.Printf("   📄 Swagger JSON: http://localhost:8080/swagger.json")
 
 	<-a.ctx.Done()
@@ -308,11 +330,11 @@ func (a *App) setupRoutes() {
 		r.Get("/ping", a.handlePing)
 
 		r.Route("/files", func(r chi.Router) {
-			r.Get("/", a.handleListFiles)
-			r.Post("/", a.handleCreateFile)
-			r.Get("/{fileID}", a.handleGetFile)
-			r.Put("/{fileID}", a.handleUpdateFile)
-			r.Delete("/{fileID}", a.handleDeleteFile)
+			r.Get("/", a.fileHandler.ListFiles)
+			r.Post("/", a.fileHandler.CreateFile)
+			r.Get("/{fileID}", a.fileHandler.GetFile)
+			r.Put("/{fileID}", a.handleUpdateFile) // TODO: Update with new handler
+			r.Delete("/{fileID}", a.fileHandler.DeleteFile)
 		})
 
 		r.Route("/sync", func(r chi.Router) {
@@ -743,43 +765,44 @@ func (a *App) setupSwaggerRoutes() {
 
 /*
 func (a *App) startBackgroundServices() {
-a.wg.Add(1)
-go func() {
-defer a.wg.Done()
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
 
-ticker := time.NewTicker(30 * time.Second)
-defer ticker.Stop()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 
-for {
-select {
-case <-a.ctx.Done():
-log.Println("Background service: context cancelled, stopping...")
-return
-case <-ticker.C:
-log.Println("Background service: performing periodic task")
-}
-}
-}()
+		for {
+			select {
+			case <-a.ctx.Done():
+				log.Println("Background service: context cancelled, stopping...")
+				return
+			case <-ticker.C:
+				log.Println("Background service: performing periodic task")
+			}
+		}
+	}()
 
-log.Println("Background services started")
+	log.Println("Background services started")
 }
 
 func (a *App) shutdownBackgroundServices(ctx context.Context) {
-log.Println("Shutting down background services...")
+	log.Println("Shutting down background services...")
 
-shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-defer cancel()
+	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
-done := make(chan struct{})
-go func() {
-time.Sleep(2 * time.Second)
-close(done)
-}()
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(2 * time.Second)
+		close(done)
+	}()
 
-select {
-case <-done:
-log.Println("Background services shutdown completed")
-case <-shutdownCtx.Done():
-log.Println("Background services shutdown timeout")
+	select {
+	case <-done:
+		log.Println("Background services shutdown completed")
+	case <-shutdownCtx.Done():
+		log.Println("Background services shutdown timeout")
+	}
 }
-}*/
+*/

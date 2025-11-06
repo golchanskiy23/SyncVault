@@ -50,15 +50,15 @@ func (s *SyncDomainService) DetectConflicts(
 		return nil, fmt.Errorf("failed to get target files: %w", err)
 	}
 
-	targetFileMap := make(map[string]*entities.FileObject)
+	targetFileMap := make(map[string]*entities.File)
 	for _, file := range targetFiles {
-		targetFileMap[file.Path().String()] = file
+		targetFileMap[file.FilePath.String()] = file
 	}
 
 	var conflicts []*entities.Conflict
 
 	for _, sourceFile := range sourceFiles {
-		targetFile, exists := targetFileMap[sourceFile.Path().String()]
+		targetFile, exists := targetFileMap[sourceFile.FilePath.String()]
 
 		if !exists {
 			continue
@@ -67,21 +67,23 @@ func (s *SyncDomainService) DetectConflicts(
 		conflict := s.analyzeFileConflict(sourceFile, targetFile, sourceNode, targetNode)
 		if conflict != nil {
 			conflicts = append(conflicts, conflict)
+		}
+	}
 
-			event := domainevents.NewConflictDetected(
-				conflict.ID(),
-				conflict.FileID(),
-				conflict.SourceNode(),
-				conflict.TargetNode(),
-				conflict.ConflictType(),
-				conflict.Description(),
-				conflict.SourceFile(),
-				conflict.TargetFile(),
-			)
+	for _, conflict := range conflicts {
+		event := domainevents.NewConflictDetected(
+			conflict.ID(),
+			conflict.FileID(),
+			conflict.SourceNode(),
+			conflict.TargetNode(),
+			conflict.ConflictType(),
+			conflict.Description(),
+			conflict.SourceFile(),
+			conflict.TargetFile(),
+		)
 
-			if err := s.eventBus.Publish(ctx, event); err != nil {
-				fmt.Printf("Failed to publish conflict event: %v\n", err)
-			}
+		if err := s.eventBus.Publish(ctx, event); err != nil {
+			fmt.Printf("Failed to publish conflict event: %v\n", err)
 		}
 	}
 
@@ -89,7 +91,7 @@ func (s *SyncDomainService) DetectConflicts(
 }
 
 func (s *SyncDomainService) analyzeFileConflict(
-	sourceFile, targetFile *entities.FileObject,
+	sourceFile, targetFile *entities.File,
 	sourceNode, targetNode valueobjects.StorageNodeID,
 ) *entities.Conflict {
 	if !sourceFile.HasSameContent(targetFile) {
@@ -97,24 +99,24 @@ func (s *SyncDomainService) analyzeFileConflict(
 			targetFile.Status() == entities.FileStatusModified {
 
 			return entities.NewConflict(
-				sourceFile.ID(),
+				valueobjects.FileID{},
 				sourceNode,
 				targetNode,
 				entities.ConflictTypeContent,
 				fmt.Sprintf("Content conflict: both files modified on %s and %s",
-					sourceFile.ModifiedAt().Format("2006-01-02 15:04:05"),
-					targetFile.ModifiedAt().Format("2006-01-02 15:04:05")),
+					sourceFile.UpdatedAt().Format("2006-01-02 15:04:05"),
+					targetFile.UpdatedAt().Format("2006-01-02 15:04:05")),
 				sourceFile,
 				targetFile,
 			)
 		}
 	}
+	fileID, _ := valueobjects.FileIDFromString(fmt.Sprintf("%d", sourceFile.ID))
 
 	if sourceFile.Status() == entities.FileStatusDeleted &&
 		targetFile.Status() == entities.FileStatusModified {
-
 		return entities.NewConflict(
-			sourceFile.ID(),
+			fileID,
 			sourceNode,
 			targetNode,
 			entities.ConflictTypeDeletion,
@@ -126,9 +128,8 @@ func (s *SyncDomainService) analyzeFileConflict(
 
 	if targetFile.Status() == entities.FileStatusDeleted &&
 		sourceFile.Status() == entities.FileStatusModified {
-
 		return entities.NewConflict(
-			sourceFile.ID(),
+			valueobjects.FileID{},
 			sourceNode,
 			targetNode,
 			entities.ConflictTypeDeletion,
@@ -172,7 +173,7 @@ func (s *SyncDomainService) CreateSyncJob(
 
 		totalSize := int64(0)
 		for _, file := range files {
-			totalSize += file.Size()
+			totalSize += file.FileSize
 		}
 
 		if !target.HasEnoughSpace(totalSize) {
@@ -185,8 +186,8 @@ func (s *SyncDomainService) CreateSyncJob(
 	return job, nil
 }
 
-func (s *SyncDomainService) getFileDetails(ctx context.Context, fileIDs []valueobjects.FileID) ([]*entities.FileObject, error) {
-	files := make([]*entities.FileObject, len(fileIDs))
+func (s *SyncDomainService) getFileDetails(ctx context.Context, fileIDs []valueobjects.FileID) ([]*entities.File, error) {
+	files := make([]*entities.File, len(fileIDs))
 
 	for i, fileID := range fileIDs {
 		file, err := s.fileRepo.FindByID(ctx, fileID)
