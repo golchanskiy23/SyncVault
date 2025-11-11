@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	httpSwagger "github.com/swaggo/http-swagger"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"syncvault/docs"
 	"syncvault/internal/app/handlers"
@@ -20,25 +21,29 @@ import (
 	"syncvault/internal/config"
 	"syncvault/internal/db"
 	"syncvault/internal/domain/ports"
+	"syncvault/internal/domain/repositories"
 	"syncvault/internal/domain/services"
 	"syncvault/internal/infrastructure/database"
 )
 
 type App struct {
-	httpServer  *http.Server
-	router      chi.Router
-	server      *http.Server
-	wg          sync.WaitGroup
-	ctx         context.Context
-	cancel      context.CancelFunc
-	shutdown    bool
-	mu          sync.RWMutex
-	config      *config.Config
-	db          *pgxpool.Pool
-	redis       RedisComponents
-	fileRepo    ports.FileRepository
-	fileService *services.FileService
-	fileHandler *handlers.FileHandler
+	httpServer   *http.Server
+	router       chi.Router
+	server       *http.Server
+	wg           sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	shutdown     bool
+	mu           sync.RWMutex
+	config       *config.Config
+	db           *pgxpool.Pool
+	mongoDB      *mongo.Database
+	redis        RedisComponents
+	fileRepo     ports.FileRepository
+	fileService  *services.FileService
+	fileHandler  *handlers.FileHandler
+	auditRepo    repositories.SyncAuditRepository
+	auditService *services.AuditService
 }
 
 func New(opts ...Option) (*App, error) {
@@ -59,6 +64,11 @@ func New(opts ...Option) (*App, error) {
 	// Initialize database connection
 	if err := app.connectDB(); err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	// Initialize MongoDB connection
+	if err := app.connectMongoDB(); err != nil {
+		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 
 	// Set up Hexagonal Architecture dependencies
@@ -129,6 +139,23 @@ func (a *App) connectDB() error {
 	}
 
 	log.Printf("✓ Database connection verified (result: %d)", result)
+	return nil
+}
+
+// connectMongoDB connects to MongoDB
+func (a *App) connectMongoDB() error {
+	db, err := mongodb.NewMongoConnection(a.config)
+	if err != nil {
+		return fmt.Errorf("failed to connect to MongoDB: %w", err)
+	}
+
+	a.mongoDB = db
+	log.Printf("✓ Connected to MongoDB at %s/%s", a.config.MongoDB.URI, a.config.MongoDB.Database)
+
+	// Initialize audit repository
+	a.auditRepo = mongodb.NewSyncAuditRepository(db)
+	a.auditService = services.NewAuditService(a.auditRepo)
+
 	return nil
 }
 
@@ -225,6 +252,15 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if a.db != nil {
 		a.db.Close()
 		log.Println("✓ Database connection closed")
+	}
+
+	// Close MongoDB connection
+	if a.mongoDB != nil {
+		if err := mongodb.CloseMongoConnection(ctx, a.mongoDB); err != nil {
+			log.Printf("Error closing MongoDB connection: %v", err)
+		} else {
+			log.Println("✓ MongoDB connection closed")
+		}
 	}
 
 	// Shutdown HTTP server
