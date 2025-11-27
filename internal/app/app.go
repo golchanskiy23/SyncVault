@@ -25,26 +25,28 @@ import (
 	"syncvault/internal/domain/services"
 	"syncvault/internal/infrastructure/database"
 	mongoinfra "syncvault/internal/infrastructure/mongodb"
+	"syncvault/internal/infrastructure/storage"
 )
 
 type App struct {
-	httpServer   *http.Server
-	router       chi.Router
-	server       *http.Server
-	wg           sync.WaitGroup
-	ctx          context.Context
-	cancel       context.CancelFunc
-	shutdown     bool
-	mu           sync.RWMutex
-	config       *config.Config
-	db           *pgxpool.Pool
-	mongoDB      *mongo.Database
-	redis        RedisComponents
-	fileRepo     ports.FileRepository
-	fileService  *services.FileService
-	fileHandler  *handlers.FileHandler
-	auditRepo    repositories.SyncAuditRepository
-	auditService *services.AuditService
+	httpServer    *http.Server
+	router        chi.Router
+	server        *http.Server
+	wg            sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	shutdown      bool
+	mu            sync.RWMutex
+	config        *config.Config
+	db            *pgxpool.Pool
+	mongoDB       *mongo.Database
+	redis         RedisComponents
+	fileRepo      ports.FileRepository
+	fileService   *services.FileService
+	fileHandler   *handlers.FileHandler
+	auditRepo     repositories.SyncAuditRepository
+	auditService  *services.AuditService
+	gridfsStorage ports.Storage
 }
 
 func New(opts ...Option) (*App, error) {
@@ -93,11 +95,18 @@ func (a *App) setupDependencies() {
 		a.fileRepo = baseRepo
 	}
 
-	// Create service (Domain layer)
-	a.fileService = services.NewFileService(a.fileRepo, nil) // Storage can be nil for now
+	// Initialize GridFS storage adapter first
+	a.gridfsStorage = storage.NewGridFSAdapter(a.mongoDB, "syncvault_files")
+
+	// Create service (Domain layer) with GridFS storage
+	a.fileService = services.NewFileService(a.fileRepo, a.gridfsStorage)
 
 	// Create handler (Application layer)
 	a.fileHandler = handlers.NewFileHandler(a.fileService)
+
+	// Initialize audit repository
+	a.auditRepo = mongoinfra.NewSyncAuditRepository(a.mongoDB)
+	a.auditService = services.NewAuditService(a.auditRepo)
 }
 
 // connectDB подключается к базе данных
