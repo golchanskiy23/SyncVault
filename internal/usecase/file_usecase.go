@@ -148,8 +148,8 @@ func WithRetryAttempts(attempts int) FileUseCaseOption {
 
 type FileUseCase interface {
 	SyncFile(ctx context.Context, fileID valueobjects.FileID, sourceNode, targetNode valueobjects.StorageNodeID) error
-	GetFileStatus(ctx context.Context, fileID valueobjects.FileID) (*entities.FileObject, error)
-	ListFiles(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.FileObject, error)
+	GetFileStatus(ctx context.Context, fileID valueobjects.FileID) (*entities.File, error)
+	ListFiles(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.File, error)
 }
 
 type FileUseCaseImpl struct {
@@ -223,15 +223,15 @@ func (uc *FileUseCaseImpl) SyncFile(ctx context.Context, fileID valueobjects.Fil
 	return uc.eventBus.Publish(ctx, event)
 }
 
-func (uc *FileUseCaseImpl) GetFileStatus(ctx context.Context, fileID valueobjects.FileID) (*entities.FileObject, error) {
+func (uc *FileUseCaseImpl) GetFileStatus(ctx context.Context, fileID valueobjects.FileID) (*entities.File, error) {
 	return uc.fileRepo.FindByID(ctx, fileID)
 }
 
-func (uc *FileUseCaseImpl) ListFiles(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.FileObject, error) {
+func (uc *FileUseCaseImpl) ListFiles(ctx context.Context, nodeID valueobjects.StorageNodeID) ([]*entities.File, error) {
 	return uc.fileRepo.FindByNode(ctx, nodeID)
 }
 
-func (uc *FileUseCaseImpl) syncFile(ctx context.Context, file *entities.FileObject, sourceNode, targetNode valueobjects.StorageNodeID) error {
+func (uc *FileUseCaseImpl) syncFile(ctx context.Context, file *entities.File, sourceNode, targetNode valueobjects.StorageNodeID) error {
 	file.MarkAsSynced()
 	return uc.fileRepo.Save(ctx, file)
 }
