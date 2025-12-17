@@ -2,10 +2,10 @@ syntax = "proto3";
 
 package syncvault.v1.common;
 
-option go_package = "syncvault/internal/grpc/proto/common/v1;commonv1";
+option go_package = "syncvault/internal/grpc/proto/common;commonv1";
 
 import "google/protobuf/timestamp.proto";
-import "google/protobuf/duration.proto";
+//import "google/protobuf/duration.proto";
 
 // Общие типы для всех сервисов
 
