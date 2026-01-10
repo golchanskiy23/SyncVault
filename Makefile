@@ -169,6 +169,16 @@ dev: fmt lint test-unit build run
 # Микросервисы
 include Makefile.microservices
 
+# API Gateway
+run-gateway:
+	@echo "🌐 Starting API Gateway..."
+	cd cmd/api-gateway && go run main.go
+
+# Полная среда разработки с API Gateway
+dev-full:
+	@echo "🎯 Starting full development environment with API Gateway..."
+	$(MAKE) dev-start-gateway
+
 # CI/CD пайплайн
 ci: deps lint test-unit test-integration build security
 	@echo "🚀 CI pipeline completed"

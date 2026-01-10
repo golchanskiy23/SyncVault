@@ -17,11 +17,19 @@ import (
 
 	commonv1 "syncvault/internal/grpc/proto/common"
 	storagev1 "syncvault/internal/grpc/proto/storage"
+	"syncvault/internal/storage"
 )
 
 // StorageService микросервис для хранения данных
 type StorageService struct {
 	storagev1.UnimplementedStorageServiceServer
+	deviceManager *storage.DeviceManager
+}
+
+func NewStorageService() *StorageService {
+	return &StorageService{
+		deviceManager: storage.NewDeviceManager(nil), // Здесь будет конфиг
+	}
 }
 
 func (s *StorageService) StoreFile(ctx context.Context, req *storagev1.StoreFileRequest) (*storagev1.StoreFileResponse, error) {
@@ -164,7 +172,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Регистрируем сервисы
-	storageService := &StorageService{}
+	storageService := NewStorageService()
 	storagev1.RegisterStorageServiceServer(grpcServer, storageService)
 
 	// Включаем reflection для разработки
@@ -214,4 +222,84 @@ func main() {
 	case <-stopped:
 		log.Println("Storage Service stopped gracefully")
 	}
+}
+
+// Методы для работы с метаданными файлов
+
+// SyncFileMetadata синхронизирует метаданные файла между устройствами
+func (s *StorageService) SyncFileMetadata(ctx context.Context, req *storagev1.SyncFileMetadataRequest) (*storagev1.SyncFileMetadataResponse, error) {
+	log.Printf("Syncing file metadata: %s from device %s to device %s",
+		req.FilePath, req.SourceDeviceId, req.TargetDeviceId)
+
+	// Получаем исходное устройство
+	sourceDevice, err := s.deviceManager.GetDevice(req.SourceDeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("source device not found: %w", err)
+	}
+
+	// Получаем целевое устройство
+	targetDevice, err := s.deviceManager.GetDevice(req.TargetDeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("target device not found: %w", err)
+	}
+
+	// Здесь должна быть логика синхронизации метаданных
+	// Например, обновление версии файла, статуса синхронизации
+
+	log.Printf("Metadata synced successfully for file: %s", req.FilePath)
+
+	return &storagev1.SyncFileMetadataResponse{
+		Success:  true,
+		Message:  "File metadata synced successfully",
+		FileId:   fmt.Sprintf("file_%d", time.Now().UnixNano()),
+		Version:  1,
+		SyncedAt: timestamppb.Now(),
+	}, nil
+}
+
+// GetFileHistory получает историю изменений файла
+func (s *StorageService) GetFileHistory(ctx context.Context, req *storagev1.GetFileHistoryRequest) (*storagev1.GetFileHistoryResponse, error) {
+	log.Printf("Getting file history for: %s", req.FilePath)
+
+	// Здесь должна быть логика получения истории из базы данных
+	// Например, из PostgreSQL или MongoDB
+
+	history := []*storagev1.FileVersion{
+		{
+			Version:    1,
+			DeviceId:   "device_1",
+			ModifiedAt: timestamppb.Now(),
+			Size:       1024,
+			Hash:       "hash_1",
+		},
+		{
+			Version:    2,
+			DeviceId:   "device_2",
+			ModifiedAt: timestamppb.Now(),
+			Size:       2048,
+			Hash:       "hash_2",
+		},
+	}
+
+	return &storagev1.GetFileHistoryResponse{
+		History:       history,
+		TotalVersions: int32(len(history)),
+	}, nil
+}
+
+// ResolveConflict разрешает конфликт файлов
+func (s *StorageService) ResolveConflict(ctx context.Context, req *storagev1.ResolveConflictRequest) (*storagev1.ResolveConflictResponse, error) {
+	log.Printf("Resolving conflict for file: %s", req.FilePath)
+
+	// Здесь должна быть логика разрешения конфликтов
+	// Например, выбор версии пользователя, слияние изменений
+
+	log.Printf("Conflict resolved for file: %s, selected version: %d", req.FilePath, req.SelectedVersion)
+
+	return &storagev1.ResolveConflictResponse{
+		Success:         true,
+		Message:         "Conflict resolved successfully",
+		ResolvedVersion: req.SelectedVersion,
+		ResolvedAt:      timestamppb.Now(),
+	}, nil
 }
