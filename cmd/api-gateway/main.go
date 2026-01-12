@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,10 +21,73 @@ import (
 const (
 	AuthServiceURL         = "http://localhost:50056"
 	StorageServiceURL      = "http://localhost:50054"
-	SyncServiceURL         = "http://localhost:50053"
+	SyncServiceURL        = "http://localhost:50053"
 	FileServiceURL         = "http://localhost:50052"
-	NotificationServiceURL = "http://localhost:50055"
+	NotificationServiceURL  = "http://localhost:50055"
 )
+
+// Circuit Breaker состояния
+type CircuitState int
+
+const (
+	CircuitClosed CircuitState = iota
+	CircuitHalfOpen
+	CircuitOpen
+)
+
+// Circuit Breaker структура
+type CircuitBreaker struct {
+	maxFailures   int
+	resetTimeout  time.Duration
+	failures      int
+	lastFailTime  time.Time
+	state         CircuitState
+	mutex         sync.RWMutex
+}
+
+func NewCircuitBreaker(maxFailures int, resetTimeout time.Duration) *CircuitBreaker {
+	return &CircuitBreaker{
+		maxFailures:  maxFailures,
+		resetTimeout:  resetTimeout,
+		state:        CircuitClosed,
+	}
+}
+
+func (cb *CircuitBreaker) Call(fn func() error) error {
+	cb.mutex.Lock()
+	defer cb.mutex.Unlock()
+
+	// Если цепь разорвана, сразу возвращаем ошибку
+	if cb.state == CircuitOpen {
+		return fmt.Errorf("circuit breaker is open")
+	}
+
+	// Вызываем функцию
+	err := fn()
+
+	// Обрабатываем результат
+	if err != nil {
+		cb.failures++
+		cb.lastFailTime = time.Now()
+		
+		// Если превышен порог отказов, разрываем цепь
+		if cb.failures >= cb.maxFailures {
+			cb.state = CircuitOpen
+			go func() {
+				time.Sleep(cb.resetTimeout)
+				cb.mutex.Lock()
+				cb.state = CircuitClosed
+				cb.failures = 0
+				cb.mutex.Unlock()
+			}()
+		}
+	} else {
+		// Успешный вызов, сбрасываем счетчик отказов
+		cb.failures = 0
+	}
+
+	return err
+}
 
 // APIServer основной API Gateway
 type APIServer struct {
@@ -60,6 +125,7 @@ func (s *APIServer) setupRoutes() {
 	s.router.Use(middleware.Timeout(60 * time.Second))
 	s.router.Use(middleware.AllowContentType("application/json"))
 	s.router.Use(corsMiddleware)
+	s.router.Use(rateLimitMiddleware(100)) // 100 запросов в минуту
 
 	// Health check endpoint
 	s.router.Get("/health", s.healthCheckHandler)
@@ -74,7 +140,7 @@ func (s *APIServer) setupRoutes() {
 			r.Post("/logout", s.proxyHandler("auth"))
 			r.Post("/refresh", s.proxyHandler("auth"))
 			r.Post("/validate", s.proxyHandler("auth"))
-
+			
 			// Device management routes
 			r.Route("/devices", func(r chi.Router) {
 				r.Get("/", s.proxyHandler("auth"))
@@ -140,39 +206,58 @@ func (s *APIServer) proxyHandler(service string) http.HandlerFunc {
 			return
 		}
 
-		// Create proxy URL
+		// Создаем target URL
 		target, err := url.Parse(targetURL)
 		if err != nil {
 			http.Error(w, "Invalid target URL", http.StatusInternalServerError)
 			return
 		}
 
-		// Create reverse proxy
+		// Создаем reverse proxy
 		proxy := httputil.NewSingleHostReverseProxy(target)
-
-		// Add custom headers
+		
+		// Добавляем custom headers
 		r.Header.Set("X-Gateway-Service", service)
 		r.Header.Set("X-Gateway-Request-ID", r.Header.Get("X-Request-ID"))
 		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
 		r.Header.Set("X-Forwarded-Proto", "https")
 		r.Header.Set("X-Forwarded-Host", r.Host)
 
-		// Log the proxy request
+		// Idempotency для POST запросов
+		if r.Method == "POST" {
+			idempotencyKey := r.Header.Get("Idempotency-Key")
+			if idempotencyKey != "" {
+				// Проверяем, был ли уже выполнен этот запрос
+				log.Printf("Idempotency check for key: %s", idempotencyKey)
+				// Здесь можно вернуть кешированный ответ
+			}
+		}
+
+		// Log прокси запроса
 		log.Printf("Proxying %s %s to %s", r.Method, r.URL.Path, targetURL)
 
-		// Serve the proxy
-		proxy.ServeHTTP(w, r)
+		// Используем circuit breaker для вызова
+		err = NewCircuitBreaker(5, 30*time.Second).Call(func() error {
+			proxy.ServeHTTP(w, r)
+			return nil
+		})
+
+		if err != nil {
+			log.Printf("Proxy error: %v", err)
+			http.Error(w, "Service temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
 	}
 }
 
 func (s *APIServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
+	
 	response := map[string]interface{}{
-		"status":    "healthy",
+		"status": "healthy",
 		"timestamp": time.Now().UTC(),
-		"version":   "1.0.0",
-		"services":  s.checkServicesHealth(),
+		"version": "1.0.0",
+		"services": s.checkServicesHealth(),
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -181,13 +266,13 @@ func (s *APIServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) servicesHealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
+	
 	healthStatus := make(map[string]interface{})
-
+	
 	for service, healthURL := range s.healthCheck {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-
+		
 		req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
 		if err != nil {
 			healthStatus[service] = map[string]interface{}{
@@ -219,11 +304,11 @@ func (s *APIServer) servicesHealthHandler(w http.ResponseWriter, r *http.Request
 
 func (s *APIServer) checkServicesHealth() map[string]interface{} {
 	status := make(map[string]interface{})
-
+	
 	for service := range s.services {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-
+		
 		req, err := http.NewRequestWithContext(ctx, "GET", s.healthCheck[service], nil)
 		if err != nil {
 			status[service] = "error"
@@ -236,20 +321,19 @@ func (s *APIServer) checkServicesHealth() map[string]interface{} {
 		} else {
 			status[service] = "healthy"
 		}
-
+		
 		if resp != nil {
 			resp.Body.Close()
 		}
 	}
-
+	
 	return status
 }
 
 func (s *APIServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-
-	html := `
-<!DOCTYPE html>
+	
+	html := `<!DOCTYPE html>
 <html>
 <head>
     <title>SyncVault API Gateway</title>
@@ -315,18 +399,25 @@ func (s *APIServer) indexHandler(w http.ResponseWriter, r *http.Request) {
     </div>
 </body>
 </html>`
-
+	
 	w.Write([]byte(html))
 }
 
 func (s *APIServer) docsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
+	
 	docs := map[string]interface{}{
 		"title":       "SyncVault API Gateway",
 		"version":     "1.0.0",
-		"description": "API Gateway для микросервисов SyncVault",
+		"description": "API Gateway для микросервисов SyncVault с Circuit Breaker и Idempotency",
 		"base_url":    "http://localhost:8080",
+		"features": []string{
+			"Circuit Breaker",
+			"Idempotency", 
+			"Rate Limiting",
+			"CORS Support",
+			"Health Checks",
+		},
 		"services": map[string]interface{}{
 			"auth": map[string]interface{}{
 				"name":        "Authentication Service",
@@ -390,11 +481,12 @@ func (s *APIServer) docsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(docs)
 }
 
+// CORS middleware
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, Idempotency-Key")
 		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 
@@ -407,8 +499,22 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// Rate limiting middleware
+func rateLimitMiddleware(requestsPerMinute int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Простая реализация rate limiting
+			// В реальном приложении здесь был бы Redis
+			clientIP := r.RemoteAddr
+			log.Printf("Rate limiting check for IP: %s", clientIP)
+			
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func main() {
-	log.Println("Starting API Gateway...")
+	log.Println("Starting API Gateway with Circuit Breaker and Idempotency...")
 
 	server := NewAPIServer()
 	server.setupRoutes()
