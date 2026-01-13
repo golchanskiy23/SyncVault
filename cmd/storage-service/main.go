@@ -44,7 +44,7 @@ func (s *StorageService) StoreFile(ctx context.Context, req *storagev1.StoreFile
 		FileHash:      fileHash,
 		CreatedAt:     timestamppb.Now(),
 		Size:          req.Size,
-		StorageNodeId: req.StorageNodeId,
+		StorageNodeId: "storage-node-1",
 	}, nil
 }
 
@@ -52,90 +52,51 @@ func (s *StorageService) GetFile(ctx context.Context, req *storagev1.GetFileRequ
 	log.Printf("Getting file: %s", req.FilePath)
 
 	// Имитация получения файла
-	metadata := &storagev1.FileMetadata{
-		FileId:     "storage_1",
-		FilePath:   req.FilePath,
-		FileSize:   1024,
-		MimeType:   "text/plain",
-		CreatedAt:  timestamppb.Now(),
-		ModifiedAt: timestamppb.Now(),
-		SyncedAt:   timestamppb.Now(),
-		Checksum:   "abc123",
-		Status:     commonv1.FileStatus_FILE_STATUS_SYNCED,
-		Version:    1,
-		ChunkCount: 1,
-	}
+	fileContent := "This is a test file content"
+	fileSize := int64(len(fileContent))
 
 	return &storagev1.GetFileResponse{
-		Metadata: metadata,
-		Content:  []byte("This is file content"),
+		Metadata: &storagev1.FileMetadata{
+			FileId:    "file_123",
+			FilePath:  req.FilePath,
+			FileSize:  fileSize,
+			FileHash:  "test-hash",
+			CreatedAt: timestamppb.Now(),
+			MimeType:  "text/plain",
+		},
+		Content:   []byte(fileContent),
+		TotalSize: fileSize,
+		HasMore:   false,
 	}, nil
 }
 
 func (s *StorageService) DeleteFile(ctx context.Context, req *storagev1.DeleteFileRequest) (*emptypb.Empty, error) {
 	log.Printf("Deleting file: %s", req.FilePath)
 
+	// Имитация удаления файла
 	return &emptypb.Empty{}, nil
 }
 
-func (s *StorageService) FileExists(ctx context.Context, req *storagev1.FileExistsRequest) (*storagev1.FileExistsResponse, error) {
-	log.Printf("Checking if file exists: %s", req.FilePath)
-
-	// Имитация проверки существования файла
-	exists := true // В реальном приложении здесь была бы проверка в storage
-	var metadata *storagev1.FileMetadata
-	if exists {
-		metadata = &storagev1.FileMetadata{
-			FileId:     "storage_1",
-			FilePath:   req.FilePath,
-			FileSize:   1024,
-			MimeType:   "text/plain",
-			CreatedAt:  timestamppb.Now(),
-			ModifiedAt: timestamppb.Now(),
-			SyncedAt:   timestamppb.Now(),
-			Checksum:   "abc123",
-			Status:     commonv1.FileStatus_FILE_STATUS_SYNCED,
-			Version:    1,
-			ChunkCount: 1,
-		}
-	}
-
-	return &storagev1.FileExistsResponse{
-		Exists:   exists,
-		Metadata: metadata,
-	}, nil
-}
-
 func (s *StorageService) ListFiles(ctx context.Context, req *storagev1.ListFilesRequest) (*storagev1.ListFilesResponse, error) {
-	log.Printf("Listing files in path: %s", req.DirectoryPath)
+	log.Printf("Listing files in directory: %s", req.DirectoryPath)
 
 	// Имитация списка файлов
 	files := []*storagev1.FileMetadata{
 		{
-			FileId:     "storage_1",
-			FilePath:   "/documents/file1.txt",
-			FileSize:   1024,
-			MimeType:   "text/plain",
-			CreatedAt:  timestamppb.Now(),
-			ModifiedAt: timestamppb.Now(),
-			SyncedAt:   timestamppb.Now(),
-			Checksum:   "abc123",
-			Status:     commonv1.FileStatus_FILE_STATUS_SYNCED,
-			Version:    1,
-			ChunkCount: 1,
+			FileId:    "file_1",
+			FilePath:  "/documents/report.pdf",
+			FileSize:  1024000,
+			FileHash:  "hash_1",
+			CreatedAt: timestamppb.Now(),
+			MimeType:  "application/pdf",
 		},
 		{
-			FileId:     "storage_2",
-			FilePath:   "/images/image1.jpg",
-			FileSize:   2048,
-			MimeType:   "image/jpeg",
-			CreatedAt:  timestamppb.Now(),
-			ModifiedAt: timestamppb.Now(),
-			SyncedAt:   timestamppb.Now(),
-			Checksum:   "def456",
-			Status:     commonv1.FileStatus_FILE_STATUS_SYNCED,
-			Version:    1,
-			ChunkCount: 1,
+			FileId:    "file_2",
+			FilePath:  "/documents/presentation.pptx",
+			FileSize:  2048000,
+			FileHash:  "hash_2",
+			CreatedAt: timestamppb.Now(),
+			MimeType:  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 		},
 	}
 
@@ -144,25 +105,69 @@ func (s *StorageService) ListFiles(ctx context.Context, req *storagev1.ListFiles
 		Pagination: &commonv1.PaginationResponse{
 			NextCursor: "",
 			HasMore:    false,
-			TotalCount: 2,
 		},
 	}, nil
 }
 
 func (s *StorageService) GetSpaceInfo(ctx context.Context, req *storagev1.GetSpaceInfoRequest) (*storagev1.GetSpaceInfoResponse, error) {
-	log.Printf("Getting storage info for node: %s", req.StorageNodeId)
+	log.Printf("Getting space info for node: %s", req.StorageNodeId)
 
-	// Имитация информации о хранилище
+	// Имитация информации о пространстве
+	spaceInfo := &commonv1.SpaceInfo{
+		TotalSpace:     10 * 1024 * 1024 * 1024, // 10GB
+		UsedSpace:      5 * 1024 * 1024 * 1024,  // 5GB
+		AvailableSpace: 5 * 1024 * 1024 * 1024,  // 5GB
+	}
+
 	return &storagev1.GetSpaceInfoResponse{
-		StorageNodeId: req.StorageNodeId,
-		SpaceInfo: &commonv1.SpaceInfo{
-			TotalSpace:     10737418240, // 10GB
-			UsedSpace:      1073741824,  // 1GB
-			FreeSpace:      9663676416,  // 9GB
-			AvailableSpace: 9663676416,
-		},
-		CalculatedAt: timestamppb.Now(),
+		SpaceInfo: spaceInfo,
 	}, nil
+}
+
+// Методы для работы с устройствами
+
+// RegisterDevice регистрирует новое устройство через Storage Service
+func (s *StorageService) RegisterDevice(ctx context.Context, userID, deviceName, deviceType string) error {
+	log.Printf("Registering device %s for user %s via Storage Service", deviceName, userID)
+
+	// Здесь должна быть логика регистрации устройства
+	// Например, сохранение в базу данных метаданных
+
+	log.Printf("Device %s registered successfully", deviceName)
+	return nil
+}
+
+// GetUserDevices получает все устройства пользователя
+func (s *StorageService) GetUserDevices(ctx context.Context, userID string) error {
+	log.Printf("Getting devices for user %s via Storage Service", userID)
+
+	// Здесь должна быть логика получения устройств
+	// Например, запрос к базе данных
+
+	log.Printf("Found devices for user %s", userID)
+	return nil
+}
+
+// SyncDevice синхронизирует устройство
+func (s *StorageService) SyncDevice(ctx context.Context, deviceID string) error {
+	log.Printf("Syncing device %s via Storage Service", deviceID)
+
+	// Здесь должна быть логика синхронизации
+	// Например, отправка команды в Sync Service
+
+	log.Printf("Device %s synced successfully", deviceID)
+	return nil
+}
+
+// GetDeviceStatus получает статус устройства
+func (s *StorageService) GetDeviceStatus(ctx context.Context, userID, deviceID string) error {
+	log.Printf("Getting device status %s for user %s via Storage Service", deviceID, userID)
+
+	// Здесь должна быть логика получения статуса
+	// Например, запрос к Device Manager
+
+	log.Printf("Device %s status: online", deviceID)
+	return nil
 }
 
 func main() {
@@ -184,7 +189,7 @@ func main() {
 		port = envPort
 	}
 
-	// Создаем listener
+	// Запускаем сервер
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Fatalf("Failed to listen on port %s: %v", port, err)
@@ -192,18 +197,17 @@ func main() {
 
 	log.Printf("Storage Service listening on port %s", port)
 
-	// Запускаем сервер в горутине
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("Failed to serve: %v", err)
 		}
 	}()
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-
 	log.Println("Shutting down Storage Service...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -222,84 +226,4 @@ func main() {
 	case <-stopped:
 		log.Println("Storage Service stopped gracefully")
 	}
-}
-
-// Методы для работы с метаданными файлов
-
-// SyncFileMetadata синхронизирует метаданные файла между устройствами
-func (s *StorageService) SyncFileMetadata(ctx context.Context, req *storagev1.SyncFileMetadataRequest) (*storagev1.SyncFileMetadataResponse, error) {
-	log.Printf("Syncing file metadata: %s from device %s to device %s",
-		req.FilePath, req.SourceDeviceId, req.TargetDeviceId)
-
-	// Получаем исходное устройство
-	sourceDevice, err := s.deviceManager.GetDevice(req.SourceDeviceId)
-	if err != nil {
-		return nil, fmt.Errorf("source device not found: %w", err)
-	}
-
-	// Получаем целевое устройство
-	targetDevice, err := s.deviceManager.GetDevice(req.TargetDeviceId)
-	if err != nil {
-		return nil, fmt.Errorf("target device not found: %w", err)
-	}
-
-	// Здесь должна быть логика синхронизации метаданных
-	// Например, обновление версии файла, статуса синхронизации
-
-	log.Printf("Metadata synced successfully for file: %s", req.FilePath)
-
-	return &storagev1.SyncFileMetadataResponse{
-		Success:  true,
-		Message:  "File metadata synced successfully",
-		FileId:   fmt.Sprintf("file_%d", time.Now().UnixNano()),
-		Version:  1,
-		SyncedAt: timestamppb.Now(),
-	}, nil
-}
-
-// GetFileHistory получает историю изменений файла
-func (s *StorageService) GetFileHistory(ctx context.Context, req *storagev1.GetFileHistoryRequest) (*storagev1.GetFileHistoryResponse, error) {
-	log.Printf("Getting file history for: %s", req.FilePath)
-
-	// Здесь должна быть логика получения истории из базы данных
-	// Например, из PostgreSQL или MongoDB
-
-	history := []*storagev1.FileVersion{
-		{
-			Version:    1,
-			DeviceId:   "device_1",
-			ModifiedAt: timestamppb.Now(),
-			Size:       1024,
-			Hash:       "hash_1",
-		},
-		{
-			Version:    2,
-			DeviceId:   "device_2",
-			ModifiedAt: timestamppb.Now(),
-			Size:       2048,
-			Hash:       "hash_2",
-		},
-	}
-
-	return &storagev1.GetFileHistoryResponse{
-		History:       history,
-		TotalVersions: int32(len(history)),
-	}, nil
-}
-
-// ResolveConflict разрешает конфликт файлов
-func (s *StorageService) ResolveConflict(ctx context.Context, req *storagev1.ResolveConflictRequest) (*storagev1.ResolveConflictResponse, error) {
-	log.Printf("Resolving conflict for file: %s", req.FilePath)
-
-	// Здесь должна быть логика разрешения конфликтов
-	// Например, выбор версии пользователя, слияние изменений
-
-	log.Printf("Conflict resolved for file: %s, selected version: %d", req.FilePath, req.SelectedVersion)
-
-	return &storagev1.ResolveConflictResponse{
-		Success:         true,
-		Message:         "Conflict resolved successfully",
-		ResolvedVersion: req.SelectedVersion,
-		ResolvedAt:      timestamppb.Now(),
-	}, nil
 }
