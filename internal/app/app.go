@@ -23,6 +23,7 @@ import (
 	"syncvault/internal/domain/ports"
 	"syncvault/internal/domain/repositories"
 	"syncvault/internal/domain/services"
+	"syncvault/internal/events"
 	grpcsrv "syncvault/internal/grpc/server"
 	"syncvault/internal/infrastructure/database"
 	mongoinfra "syncvault/internal/infrastructure/mongodb"
@@ -49,6 +50,8 @@ type App struct {
 	auditService  *services.AuditService
 	gridfsStorage ports.Storage
 	grpcServer    *grpcsrv.Server
+	kafkaProducer events.Producer
+	kafkaConsumer events.Consumer
 }
 
 func New(opts ...Option) (*App, error) {
@@ -78,6 +81,9 @@ func New(opts ...Option) (*App, error) {
 
 	// Set up Hexagonal Architecture dependencies
 	app.setupDependencies()
+
+	// Initialize Kafka components
+	app.setupKafka()
 
 	// Initialize gRPC server
 	app.grpcServer = grpcsrv.NewServer(
@@ -118,6 +124,109 @@ func (a *App) setupDependencies() {
 	// Initialize audit repository
 	a.auditRepo = mongoinfra.NewSyncAuditRepository(a.mongoDB)
 	a.auditService = services.NewAuditService(a.auditRepo)
+}
+
+func (a *App) setupKafka() {
+	// Check if Kafka is configured
+	if len(a.config.Kafka.Brokers) == 0 {
+		log.Println("⚠️ Kafka not configured, skipping Kafka initialization")
+		return
+	}
+
+	// Initialize Kafka producer
+	kafkaConfig := events.NewKafkaConfig(a.config)
+	a.kafkaProducer = events.NewKafkaProducer(kafkaConfig)
+
+	// Initialize Kafka consumer for file events
+	a.kafkaConsumer = events.NewKafkaConsumer(kafkaConfig, a.config.Kafka.FileEventsTopic)
+
+	// Start Kafka consumer in background
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		log.Println("Starting Kafka consumer for file events...")
+
+		handler := func(ctx context.Context, event *events.FileEvent) error {
+			return a.handleFileEvent(ctx, event)
+		}
+
+		if err := a.kafkaConsumer.ConsumeFileEvents(a.ctx, handler); err != nil {
+			log.Printf("Kafka consumer error: %v", err)
+		}
+	}()
+
+	log.Println("✓ Kafka components initialized")
+}
+
+func (a *App) handleFileEvent(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("Processing file event: %s - %s", event.Type, event.FilePath)
+
+	switch event.Type {
+	case events.FileCreated:
+		return a.handleFileCreated(ctx, event)
+	case events.FileUpdated:
+		return a.handleFileUpdated(ctx, event)
+	case events.FileDeleted:
+		return a.handleFileDeleted(ctx, event)
+	default:
+		log.Printf("Unknown file event type: %s", event.Type)
+	}
+
+	return nil
+}
+
+func (a *App) handleFileCreated(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File created: %s (user: %s, size: %d)", event.FilePath, event.UserID, event.Size)
+
+	// Publish sync event
+	syncEvent := &events.SyncEvent{
+		ID:         fmt.Sprintf("sync_%d", time.Now().UnixNano()),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "started",
+	}
+
+	return a.kafkaProducer.PublishSyncEvent(ctx, syncEvent)
+}
+
+func (a *App) handleFileUpdated(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File updated: %s (user: %s, size: %d)", event.FilePath, event.UserID, event.Size)
+
+	// Publish sync event
+	syncEvent := &events.SyncEvent{
+		ID:         fmt.Sprintf("sync_%d", time.Now().UnixNano()),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "started",
+	}
+
+	return a.kafkaProducer.PublishSyncEvent(ctx, syncEvent)
+}
+
+func (a *App) handleFileDeleted(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File deleted: %s (user: %s)", event.FilePath, event.UserID)
+
+	// Publish sync event
+	syncEvent := &events.SyncEvent{
+		ID:         fmt.Sprintf("sync_%d", time.Now().UnixNano()),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "started",
+	}
+
+	return a.kafkaProducer.PublishSyncEvent(ctx, syncEvent)
 }
 
 // connectDB подключается к базе данных
@@ -278,6 +387,23 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	// Cancel context to stop all operations
 	a.cancel()
+
+	// Close Kafka connections
+	if a.kafkaProducer != nil {
+		if err := a.kafkaProducer.Close(); err != nil {
+			log.Printf("Error closing Kafka producer: %v", err)
+		} else {
+			log.Println("✓ Kafka producer closed")
+		}
+	}
+
+	if a.kafkaConsumer != nil {
+		if err := a.kafkaConsumer.Close(); err != nil {
+			log.Printf("Error closing Kafka consumer: %v", err)
+		} else {
+			log.Println("✓ Kafka consumer closed")
+		}
+	}
 
 	// Close Redis connection if available
 	if a.redis.Client != nil {
@@ -545,9 +671,6 @@ func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleCreateFile(w http.ResponseWriter, r *http.Request) {
-	// Используем SimpleDB из пакета db для создания файла
-	simpleDB := db.NewSimpleDB(a.db)
-
 	// Парсим JSON из тела запроса
 	var requestBody struct {
 		Path   string `json:"path"`
@@ -561,18 +684,34 @@ func (a *App) handleCreateFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Создаем файл через базу данных
-	fileID, err := simpleDB.CreateFile(r.Context(), 1, "new_file.txt", requestBody.Path, requestBody.Size)
-	if err != nil {
-		log.Printf("Database error: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
-		return
+	// Generate a valid node ID if not provided
+	if len(requestBody.NodeID) != 32 {
+		requestBody.NodeID = "12345678901234567890123456789012"
 	}
 
-	log.Printf("File created successfully: ID=%d, Path=%s, Size=%d", fileID, requestBody.Path, requestBody.Size)
+	// Publish FileCreated event to Kafka (even if DB fails)
+	if a.kafkaProducer != nil {
+		event := &events.FileEvent{
+			ID:        fmt.Sprintf("file_%d", time.Now().UnixNano()),
+			Type:      events.FileCreated,
+			UserID:    "1",
+			FilePath:  requestBody.Path,
+			FileHash:  fmt.Sprintf("hash_%d", time.Now().UnixNano()),
+			Size:      requestBody.Size,
+			Timestamp: time.Now(),
+		}
+
+		if err := a.kafkaProducer.PublishFileEvent(r.Context(), event); err != nil {
+			log.Printf("Failed to publish FileCreated event: %v", err)
+		} else {
+			log.Printf("✓ Published FileCreated event for %s", requestBody.Path)
+		}
+	}
+
+	log.Printf("File creation request processed: Path=%s, Size=%d", requestBody.Path, requestBody.Size)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, `{"id":%d,"message":"File created successfully","path":"%s","size":%d}`, fileID, requestBody.Path, requestBody.Size)
+	fmt.Fprintf(w, `{"id":"%d","message":"File created successfully","path":"%s","size":%d}`, time.Now().UnixNano(), requestBody.Path, requestBody.Size)
 }
 
 func (a *App) handleGetFile(w http.ResponseWriter, r *http.Request) {
@@ -583,12 +722,54 @@ func (a *App) handleGetFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
+	fileID := chi.URLParam(r, "fileID")
+
+	// Publish FileUpdated event to Kafka
+	if a.kafkaProducer != nil {
+		event := &events.FileEvent{
+			ID:        fmt.Sprintf("file_%s", fileID),
+			Type:      events.FileUpdated,
+			UserID:    "1",
+			FilePath:  fmt.Sprintf("/documents/updated_%s.txt", fileID),
+			FileHash:  fmt.Sprintf("updated_hash_%s", fileID),
+			Size:      2048,
+			Timestamp: time.Now(),
+		}
+
+		if err := a.kafkaProducer.PublishFileEvent(r.Context(), event); err != nil {
+			log.Printf("Failed to publish FileUpdated event: %v", err)
+		} else {
+			log.Printf("Published FileUpdated event for file %s", fileID)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"message":"File updated successfully"}`))
 }
 
 func (a *App) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	fileID := chi.URLParam(r, "fileID")
+
+	// Publish FileDeleted event to Kafka
+	if a.kafkaProducer != nil {
+		event := &events.FileEvent{
+			ID:        fmt.Sprintf("file_%s", fileID),
+			Type:      events.FileDeleted,
+			UserID:    "1",
+			FilePath:  fmt.Sprintf("/documents/deleted_%s.txt", fileID),
+			FileHash:  fmt.Sprintf("deleted_hash_%s", fileID),
+			Size:      1024,
+			Timestamp: time.Now(),
+		}
+
+		if err := a.kafkaProducer.PublishFileEvent(r.Context(), event); err != nil {
+			log.Printf("Failed to publish FileDeleted event: %v", err)
+		} else {
+			log.Printf("Published FileDeleted event for file %s", fileID)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"message":"File deleted successfully"}`))

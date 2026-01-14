@@ -31,7 +31,7 @@ func (r *FileRepository) Create(ctx context.Context, file *entities.File) (int64
 	log.Printf("FileRepository: Creating file %+v", file)
 
 	query := `
-		INSERT INTO files (user_id, file_name, file_path, file_size_bytes, file_hash, node_id, status, created_at, updated_at)
+		INSERT INTO files (user_id, file_name, file_path, file_size_bytes, file_hash, storage_node_id, file_status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
 		RETURNING id
 	`
@@ -83,7 +83,7 @@ func (r *FileRepository) GetByID(ctx context.Context, id int64) (*entities.File,
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
 		WHERE id = $1 AND is_deleted = false
 	`
@@ -114,7 +114,7 @@ func (r *FileRepository) GetByUserID(ctx context.Context, userID int64, limit, o
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
 		WHERE user_id = $1 AND is_deleted = false
 		ORDER BY created_at DESC
@@ -163,7 +163,7 @@ func (r *FileRepository) Update_old(ctx context.Context, file *entities.File) er
 	query := `
 		UPDATE files 
 		SET file_name = $2, file_path = $3, file_size_bytes = $4, file_hash = $5,
-		    node_id = $6, status = $7, updated_at = NOW()
+		    storage_node_id = $6, file_status = $7, updated_at = NOW()
 		WHERE id = $1
 	`
 
@@ -220,9 +220,9 @@ func (r *FileRepository) FindByPath(ctx context.Context, nodeID valueobjects.Sto
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
-		WHERE node_id = $1 AND file_path = $2 AND is_deleted = false
+		WHERE storage_node_id = $1 AND file_path = $2 AND is_deleted = false
 	`
 
 	file := &entities.File{}
@@ -251,9 +251,9 @@ func (r *FileRepository) FindByNode(ctx context.Context, nodeID valueobjects.Sto
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
-		WHERE node_id = $1 AND is_deleted = false
+		WHERE storage_node_id = $1 AND is_deleted = false
 		ORDER BY created_at DESC
 	`
 
@@ -293,9 +293,9 @@ func (r *FileRepository) FindModifiedSince(ctx context.Context, nodeID valueobje
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
-		WHERE node_id = $1 AND updated_at > $2 AND is_deleted = false
+		WHERE storage_node_id = $1 AND updated_at > $2 AND is_deleted = false
 		ORDER BY updated_at DESC
 	`
 
@@ -335,7 +335,7 @@ func (r *FileRepository) Exists(ctx context.Context, nodeID valueobjects.Storage
 
 	query := `
 		SELECT COUNT(*) FROM files 
-		WHERE node_id = $1 AND file_path = $2 AND is_deleted = false
+		WHERE storage_node_id = $1 AND file_path = $2 AND is_deleted = false
 	`
 
 	var count int
@@ -367,7 +367,7 @@ func (r *FileRepository) List(ctx context.Context, filter ports.FileFilter) ([]e
 
 	query := `
 		SELECT id, user_id, file_name, file_path, file_size_bytes, file_hash, 
-		       node_id, status, created_at, updated_at, version
+		       storage_node_id, file_status, created_at, updated_at, version
 		FROM files 
 		WHERE is_deleted = false
 	`
