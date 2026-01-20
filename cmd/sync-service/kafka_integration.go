@@ -29,7 +29,7 @@ func NewSyncServiceWithKafka(cfg *config.Config) *SyncServiceWithKafka {
 	consumer := events.NewKafkaConsumer(kafkaConfig, cfg.Kafka.FileEventsTopic)
 
 	return &SyncServiceWithKafka{
-		SyncService: NewSyncService(),
+		SyncService: NewSyncService(cfg),
 		kafkaConfig: kafkaConfig,
 		producer:    producer,
 		consumer:    consumer,

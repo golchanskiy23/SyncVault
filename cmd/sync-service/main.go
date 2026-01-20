@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"syncvault/internal/config"
+	"syncvault/internal/events"
 	commonv1 "syncvault/internal/grpc/proto/common"
 	storagev1 "syncvault/internal/grpc/proto/storage"
 	syncv1 "syncvault/internal/grpc/proto/sync"
@@ -25,13 +28,290 @@ import (
 // SyncService микросервис для синхронизации файлов
 type SyncService struct {
 	syncv1.UnimplementedSyncServiceServer
-	deviceManager *storage.DeviceManager
+	deviceManager  *storage.DeviceManager
+	kafkaConfig    *events.KafkaConfig
+	producer       events.Producer
+	consumers      []*events.KafkaConsumer
+	wg             sync.WaitGroup
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 }
 
-func NewSyncService() *SyncService {
+func NewSyncService(cfg *config.Config) *SyncService {
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	kafkaConfig := events.NewKafkaConfig(cfg)
+	producer := events.NewKafkaProducer(kafkaConfig)
+
 	return &SyncService{
-		deviceManager: storage.NewDeviceManager(nil), // Здесь будет конфиг
+		deviceManager:  storage.NewDeviceManager(nil), // Здесь будет конфиг
+		kafkaConfig:    kafkaConfig,
+		producer:       producer,
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
 	}
+}
+
+func (s *SyncService) StartKafkaConsumers() error {
+	log.Println("Starting Kafka consumers...")
+
+	// Start file events consumer
+	fileEventsConsumer := events.NewKafkaConsumer(s.kafkaConfig, s.kafkaConfig.FileEventsTopic)
+	s.consumers = append(s.consumers, fileEventsConsumer)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := s.consumeFileEvents(s.shutdownCtx, fileEventsConsumer); err != nil {
+			log.Printf("File events consumer error: %v", err)
+		}
+	}()
+
+	// Start sync events consumer
+	syncEventsConsumer := events.NewKafkaConsumer(s.kafkaConfig, s.kafkaConfig.SyncEventsTopic)
+	s.consumers = append(s.consumers, syncEventsConsumer)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := s.consumeSyncEvents(s.shutdownCtx, syncEventsConsumer); err != nil {
+			log.Printf("Sync events consumer error: %v", err)
+		}
+	}()
+
+	// Start conflict events consumer
+	conflictEventsConsumer := events.NewKafkaConsumer(s.kafkaConfig, s.kafkaConfig.ConflictTopic)
+	s.consumers = append(s.consumers, conflictEventsConsumer)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		if err := s.consumeConflictEvents(s.shutdownCtx, conflictEventsConsumer); err != nil {
+			log.Printf("Conflict events consumer error: %v", err)
+		}
+	}()
+
+	log.Println("Kafka consumers started successfully")
+	return nil
+}
+
+func (s *SyncService) consumeFileEvents(ctx context.Context, consumer *events.KafkaConsumer) error {
+	handler := func(ctx context.Context, event *events.FileEvent) error {
+		log.Printf("Processing file event: %s for file: %s", event.Type, event.FilePath)
+
+		switch event.Type {
+		case events.FileCreated:
+			return s.handleFileCreated(ctx, event)
+		case events.FileUpdated:
+			return s.handleFileUpdated(ctx, event)
+		case events.FileDeleted:
+			return s.handleFileDeleted(ctx, event)
+		default:
+			log.Printf("Unknown file event type: %s", event.Type)
+			return nil
+		}
+	}
+
+	return consumer.ConsumeFileEvents(ctx, handler)
+}
+
+func (s *SyncService) consumeSyncEvents(ctx context.Context, consumer *events.KafkaConsumer) error {
+	handler := func(ctx context.Context, event *events.SyncEvent) error {
+		log.Printf("Processing sync event: %s for user: %s", event.Type, event.UserID)
+
+		switch event.Type {
+		case events.SyncStarted:
+			return s.handleSyncStarted(ctx, event)
+		case events.SyncCompleted:
+			return s.handleSyncCompleted(ctx, event)
+		case events.SyncFailed:
+			return s.handleSyncFailed(ctx, event)
+		default:
+			log.Printf("Unknown sync event type: %s", event.Type)
+			return nil
+		}
+	}
+
+	return consumer.ConsumeSyncEvents(ctx, handler)
+}
+
+func (s *SyncService) consumeConflictEvents(ctx context.Context, consumer *events.KafkaConsumer) error {
+	handler := func(ctx context.Context, event *events.ConflictEvent) error {
+		log.Printf("Processing conflict event: %s for file: %s", event.Type, event.FilePath)
+
+		switch event.Type {
+		case events.ConflictDetected:
+			return s.handleConflictDetected(ctx, event)
+		case events.ConflictResolved:
+			return s.handleConflictResolved(ctx, event)
+		default:
+			log.Printf("Unknown conflict event type: %s", event.Type)
+			return nil
+		}
+	}
+
+	return consumer.ConsumeConflictEvents(ctx, handler)
+}
+
+func (s *SyncService) handleFileCreated(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File created: %s (User: %s, Size: %d bytes)", event.FilePath, event.UserID, event.Size)
+
+	// Create sync event to trigger synchronization
+	syncEvent := &events.SyncEvent{
+		ID:         generateSyncID(),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "initiated",
+	}
+
+	if err := s.producer.PublishSyncEvent(ctx, syncEvent); err != nil {
+		log.Printf("Failed to publish sync event: %v", err)
+		return err
+	}
+
+	log.Printf("Sync initiated for file: %s", event.FilePath)
+	return nil
+}
+
+func (s *SyncService) handleFileUpdated(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File updated: %s (User: %s, Size: %d bytes)", event.FilePath, event.UserID, event.Size)
+
+	// Create sync event for file update
+	syncEvent := &events.SyncEvent{
+		ID:         generateSyncID(),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "initiated",
+	}
+
+	if err := s.producer.PublishSyncEvent(ctx, syncEvent); err != nil {
+		log.Printf("Failed to publish sync event: %v", err)
+		return err
+	}
+
+	log.Printf("Sync initiated for updated file: %s", event.FilePath)
+	return nil
+}
+
+func (s *SyncService) handleFileDeleted(ctx context.Context, event *events.FileEvent) error {
+	log.Printf("File deleted: %s (User: %s)", event.FilePath, event.UserID)
+
+	// Create sync event for file deletion
+	syncEvent := &events.SyncEvent{
+		ID:         generateSyncID(),
+		Type:       events.SyncStarted,
+		UserID:     event.UserID,
+		SourceNode: "file-service",
+		TargetNode: "sync-service",
+		FilePaths:  []string{event.FilePath},
+		Timestamp:  time.Now(),
+		Status:     "initiated",
+	}
+
+	if err := s.producer.PublishSyncEvent(ctx, syncEvent); err != nil {
+		log.Printf("Failed to publish sync event: %v", err)
+		return err
+	}
+
+	log.Printf("Sync initiated for deleted file: %s", event.FilePath)
+	return nil
+}
+
+func (s *SyncService) handleSyncStarted(ctx context.Context, event *events.SyncEvent) error {
+	log.Printf("Sync started: %s for user %s", event.ID, event.UserID)
+
+	// Simulate sync process
+	go func() {
+		time.Sleep(2 * time.Second) // Simulate sync duration
+
+		completedEvent := &events.SyncEvent{
+			ID:         event.ID,
+			Type:       events.SyncCompleted,
+			UserID:     event.UserID,
+			SourceNode: event.SourceNode,
+			TargetNode: event.TargetNode,
+			FilePaths:  event.FilePaths,
+			Timestamp:  time.Now(),
+			Status:     "completed",
+		}
+
+		if err := s.producer.PublishSyncEvent(ctx, completedEvent); err != nil {
+			log.Printf("Failed to publish sync completion event: %v", err)
+		} else {
+			log.Printf("Sync completed: %s", event.ID)
+		}
+	}()
+
+	return nil
+}
+
+func (s *SyncService) handleSyncCompleted(ctx context.Context, event *events.SyncEvent) error {
+	log.Printf("Sync completed: %s for user %s", event.ID, event.UserID)
+	return nil
+}
+
+func (s *SyncService) handleSyncFailed(ctx context.Context, event *events.SyncEvent) error {
+	log.Printf("Sync failed: %s for user %s, error: %s", event.ID, event.UserID, event.Error)
+	return nil
+}
+
+func (s *SyncService) handleConflictDetected(ctx context.Context, event *events.ConflictEvent) error {
+	log.Printf("Conflict detected: %s for file %s between %s and %s",
+		event.ID, event.FilePath, event.SourceNode, event.TargetNode)
+
+	// TODO: Implement conflict resolution logic
+	return nil
+}
+
+func (s *SyncService) handleConflictResolved(ctx context.Context, event *events.ConflictEvent) error {
+	log.Printf("Conflict resolved: %s for file %s", event.ID, event.FilePath)
+	return nil
+}
+
+func (s *SyncService) ShutdownKafka() error {
+	log.Println("Shutting down Kafka consumers...")
+
+	// Cancel shutdown context
+	s.shutdownCancel()
+
+	// Close all consumers
+	for _, consumer := range s.consumers {
+		if err := consumer.Close(); err != nil {
+			log.Printf("Error closing consumer: %v", err)
+		}
+	}
+
+	// Close producer
+	if err := s.producer.Close(); err != nil {
+		log.Printf("Error closing producer: %v", err)
+	}
+
+	// Wait for all goroutines to finish
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("Kafka consumers shutdown completed")
+		return nil
+	case <-time.After(30 * time.Second):
+		log.Println("Kafka shutdown timeout")
+		return fmt.Errorf("kafka shutdown timeout")
+	}
+}
+
+func generateSyncID() string {
+	return fmt.Sprintf("sync_%d", time.Now().UnixNano())
 }
 
 func (s *SyncService) StartSync(stream syncv1.SyncService_StartSyncServer) error {
@@ -331,12 +611,24 @@ func (s *SyncService) ResolveConflict(ctx context.Context, req *syncv1.ResolveCo
 func main() {
 	log.Println("Starting Sync Service microservice...")
 
+	// Load configuration
+	cfg, err := config.LoadFromFile("internal/config/config.yml")
+	if err != nil {
+		log.Printf("Failed to load config, using defaults: %v", err)
+		cfg = config.Default()
+	}
+
 	// Создаем gRPC сервер
 	grpcServer := grpc.NewServer()
 
 	// Регистрируем сервисы
-	syncService := NewSyncService()
+	syncService := NewSyncService(cfg)
 	syncv1.RegisterSyncServiceServer(grpcServer, syncService)
+
+	// Start Kafka consumers
+	if err := syncService.StartKafkaConsumers(); err != nil {
+		log.Fatalf("Failed to start Kafka consumers: %v", err)
+	}
 
 	// Включаем reflection для разработки
 	reflection.Register(grpcServer)
@@ -368,6 +660,11 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down Sync Service...")
+
+	// Shutdown Kafka consumers first
+	if err := syncService.ShutdownKafka(); err != nil {
+		log.Printf("Error during Kafka shutdown: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
