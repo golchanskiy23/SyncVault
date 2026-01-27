@@ -1,0 +1,422 @@
+syntax = "proto3";
+
+package syncvault.v1.notification;
+
+option go_package = "syncvault/internal/grpc/proto/notification;notificationv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "common/types.proto";
+
+// NotificationService управляет уведомлениями и событиями
+service NotificationService {
+  // Server streaming для подписки на уведомления
+  rpc Subscribe(SubscribeRequest) returns (stream NotificationResponse);
+  
+  // Отправка уведомления
+  rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse);
+  
+  // Получение уведомлений
+  rpc GetNotifications(GetNotificationsRequest) returns (GetNotificationsResponse);
+  
+  // Пометка уведомления как прочитанного
+  rpc MarkAsRead(MarkAsReadRequest) returns (google.protobuf.Empty);
+  
+  // Пометка всех уведомлений как прочитанных
+  rpc MarkAllAsRead(MarkAllAsReadRequest) returns (MarkAllAsReadResponse);
+  
+  // Удаление уведомления
+  rpc DeleteNotification(DeleteNotificationRequest) returns (google.protobuf.Empty);
+  
+  // Получение настроек уведомлений
+  rpc GetNotificationSettings(GetNotificationSettingsRequest) returns (GetNotificationSettingsResponse);
+  
+  // Обновление настроек уведомлений
+  rpc UpdateNotificationSettings(UpdateNotificationSettingsRequest) returns (UpdateNotificationSettingsResponse);
+  
+  // Создание шаблона уведомления
+  rpc CreateNotificationTemplate(CreateNotificationTemplateRequest) returns (CreateNotificationTemplateResponse);
+  
+  // Получение шаблонов уведомлений
+  rpc GetNotificationTemplates(GetNotificationTemplatesRequest) returns (GetNotificationTemplatesResponse);
+  
+  // Проверка здоровья сервиса уведомлений
+  rpc HealthCheck(google.protobuf.Empty) returns (HealthCheckResponse);
+}
+
+// SubscribeRequest запрос на подписку на уведомления
+message SubscribeRequest {
+  string user_id = 1;
+  string node_id = 2;
+  repeated NotificationType types = 3;
+  repeated NotificationPriority priorities = 4;
+  repeated string channels = 5;
+  map<string, string> filters = 6;
+  google.protobuf.Timestamp since = 7;
+  google.protobuf.Duration timeout = 8;
+  bool include_read = 9;
+  int32 max_queue_size = 10;
+  string client_id = 11;
+  map<string, string> metadata = 12;
+}
+
+// NotificationResponse ответ с уведомлением
+message NotificationResponse {
+  oneof response {
+    Notification notification = 1;
+    SubscriptionStatus status = 2;
+    Heartbeat heartbeat = 3;
+    SubscriptionError error = 4;
+    NotificationBatch batch = 5;
+  }
+}
+
+// Notification представляет уведомление
+message Notification {
+  string notification_id = 1;
+  string user_id = 2;
+  string node_id = 3;
+  NotificationType type = 4;
+  NotificationPriority priority = 5;
+  string title = 6;
+  string message = 7;
+  map<string, string> data = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  bool read = 11;
+  google.protobuf.Timestamp read_at = 12;
+  string source = 13;
+  string category = 14;
+  repeated string tags = 15;
+  repeated Action actions = 16;
+  string template_id = 17;
+  map<string, string> metadata = 18;
+}
+
+// NotificationBatch представляет пакет уведомлений
+message NotificationBatch {
+  repeated Notification notifications = 1;
+  int32 batch_size = 2;
+  google.protobuf.Timestamp batch_created_at = 3;
+}
+
+// Action представляет действие уведомления
+message Action {
+  string action_id = 1;
+  string label = 2;
+  string url = 3;
+  ActionType type = 4;
+  map<string, string> parameters = 5;
+  bool primary = 6;
+}
+
+// SubscriptionStatus представляет статус подписки
+message SubscriptionStatus {
+  string subscription_id = 1;
+  bool active = 2;
+  google.protobuf.Timestamp subscribed_at = 3;
+  google.protobuf.Timestamp last_activity = 4;
+  int32 queued_notifications = 5;
+  int32 delivered_notifications = 6;
+  int32 failed_notifications = 7;
+  repeated NotificationType subscribed_types = 8;
+  repeated string channels = 9;
+  google.protobuf.Duration avg_delivery_time = 10;
+  float delivery_rate = 11;
+}
+
+// Heartbeat представляет heartbeat сообщение
+message Heartbeat {
+  google.protobuf.Timestamp timestamp = 1;
+  int32 sequence_number = 2;
+  SubscriptionStatus status = 3;
+  string subscription_id = 4;
+}
+
+// SubscriptionError представляет ошибку подписки
+message SubscriptionError {
+  string error_code = 1;
+  string error_message = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  bool recoverable = 4;
+  string subscription_id = 5;
+}
+
+// SendNotificationRequest запрос на отправку уведомления
+message SendNotificationRequest {
+  string user_id = 1;
+  string node_id = 2;
+  NotificationType type = 3;
+  NotificationPriority priority = 4;
+  string title = 5;
+  string message = 6;
+  map<string, string> data = 7;
+  repeated string channels = 8;
+  google.protobuf.Timestamp scheduled_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  string template_id = 11;
+  map<string, string> template_data = 12;
+  repeated string recipients = 13;
+  bool persist = 14;
+  map<string, string> metadata = 15;
+}
+
+// SendNotificationResponse ответ на отправку уведомления
+message SendNotificationResponse {
+  string notification_id = 1;
+  bool sent = 2;
+  google.protobuf.Timestamp sent_at = 3;
+  repeated string failed_channels = 4;
+  map<string, string> delivery_status = 5;
+}
+
+// GetNotificationsRequest запрос на получение уведомлений
+message GetNotificationsRequest {
+  string user_id = 1;
+  string node_id = 2;
+  repeated NotificationType types = 3;
+  repeated NotificationPriority priorities = 4;
+  bool include_read = 5;
+  bool include_expired = 6;
+  google.protobuf.Timestamp from = 7;
+  google.protobuf.Timestamp to = 8;
+  common.QueryRequest query = 9;
+}
+
+// GetNotificationsResponse ответ с уведомлениями
+message GetNotificationsResponse {
+  repeated Notification notifications = 1;
+  common.PaginationResponse pagination = 2;
+  NotificationSummary summary = 3;
+}
+
+// NotificationSummary представляет сводную информацию об уведомлениях
+message NotificationSummary {
+  int32 total_count = 1;
+  int32 unread_count = 2;
+  int32 expired_count = 3;
+  map<string, int32> count_by_type = 4;
+  map<string, int32> count_by_priority = 5;
+  google.protobuf.Timestamp oldest_notification = 6;
+  google.protobuf.Timestamp newest_notification = 7;
+}
+
+// MarkAsReadRequest запрос на пометку как прочитанного
+message MarkAsReadRequest {
+  string notification_id = 1;
+  string user_id = 2;
+  google.protobuf.Timestamp read_at = 3;
+}
+
+// MarkAllAsReadRequest запрос на пометку всех как прочитанных
+message MarkAllAsReadRequest {
+  string user_id = 1;
+  string node_id = 2;
+  repeated NotificationType types = 3;
+  google.protobuf.Timestamp before = 4;
+}
+
+// MarkAllAsReadResponse ответ на пометку всех как прочитанных
+message MarkAllAsReadResponse {
+  int32 marked_count = 1;
+  google.protobuf.Timestamp marked_at = 2;
+}
+
+// DeleteNotificationRequest запрос на удаление уведомления
+message DeleteNotificationRequest {
+  string notification_id = 1;
+  string user_id = 2;
+  bool permanent = 3;
+}
+
+// GetNotificationSettingsRequest запрос настроек уведомлений
+message GetNotificationSettingsRequest {
+  string user_id = 1;
+  string node_id = 2;
+}
+
+// GetNotificationSettingsResponse ответ с настройками уведомлений
+message GetNotificationSettingsResponse {
+  NotificationSettings settings = 1;
+}
+
+// UpdateNotificationSettingsRequest запрос на обновление настроек
+message UpdateNotificationSettingsRequest {
+  string user_id = 1;
+  string node_id = 2;
+  NotificationSettings settings = 3;
+}
+
+// UpdateNotificationSettingsResponse ответ на обновление настроек
+message UpdateNotificationSettingsResponse {
+  bool updated = 1;
+  NotificationSettings settings = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// NotificationSettings представляет настройки уведомлений
+message NotificationSettings {
+  string user_id = 1;
+  string node_id = 2;
+  bool enabled = 3;
+  map<string, bool> type_settings = 4;
+  map<string, bool> priority_settings = 5;
+  map<string, ChannelSettings> channel_settings = 6;
+  google.protobuf.Duration quiet_hours_start = 7;
+  google.protobuf.Duration quiet_hours_end = 8;
+  bool quiet_hours_enabled = 9;
+  int32 max_daily_notifications = 10;
+  repeated string blocked_sources = 11;
+  repeated string allowed_sources = 12;
+  bool group_similar = 13;
+  google.protobuf.Duration auto_read_delay = 14;
+  repeated string preferred_languages = 15;
+  map<string, string> custom_settings = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+// ChannelSettings представляет настройки канала
+message ChannelSettings {
+  bool enabled = 1;
+  map<string, bool> type_settings = 2;
+  map<string, bool> priority_settings = 3;
+  int32 max_frequency = 4;
+  google.protobuf.Duration quiet_hours_start = 5;
+  google.protobuf.Duration quiet_hours_end = 6;
+  bool quiet_hours_enabled = 7;
+  map<string, string> channel_specific = 8;
+}
+
+// CreateNotificationTemplateRequest запрос на создание шаблона
+message CreateNotificationTemplateRequest {
+  string template_id = 1;
+  NotificationType type = 2;
+  string name = 3;
+  string description = 4;
+  string title_template = 5;
+  string message_template = 6;
+  map<string, string> default_data = 7;
+  repeated string supported_languages = 8;
+  map<string, LocalizedTemplate> localized_templates = 9;
+  repeated Action default_actions = 10;
+  bool active = 11;
+  google.protobuf.Timestamp expires_at = 12;
+  map<string, string> metadata = 13;
+}
+
+// CreateNotificationTemplateResponse ответ на создание шаблона
+message CreateNotificationTemplateResponse {
+  string template_id = 1;
+  bool created = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// GetNotificationTemplatesRequest запрос на получение шаблонов
+message GetNotificationTemplatesRequest {
+  repeated NotificationType types = 1;
+  bool active_only = 2;
+  string language = 3;
+  common.QueryRequest query = 4;
+}
+
+// GetNotificationTemplatesResponse ответ с шаблонами
+message GetNotificationTemplatesResponse {
+  repeated NotificationTemplate templates = 1;
+  common.PaginationResponse pagination = 2;
+}
+
+// NotificationTemplate представляет шаблон уведомления
+message NotificationTemplate {
+  string template_id = 1;
+  NotificationType type = 2;
+  string name = 3;
+  string description = 4;
+  string title_template = 5;
+  string message_template = 6;
+  map<string, string> default_data = 7;
+  repeated string supported_languages = 8;
+  map<string, LocalizedTemplate> localized_templates = 9;
+  repeated Action default_actions = 10;
+  bool active = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  google.protobuf.Timestamp expires_at = 14;
+  map<string, string> metadata = 15;
+}
+
+// LocalizedTemplate представляет локализованный шаблон
+message LocalizedTemplate {
+  string language = 1;
+  string title_template = 2;
+  string message_template = 3;
+  map<string, string> localized_data = 4;
+}
+
+// HealthCheckResponse ответ health check
+message HealthCheckResponse {
+  bool healthy = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  map<string, string> details = 4;
+  repeated string dependencies = 5;
+  int32 active_subscriptions = 6;
+  int32 queued_notifications = 7;
+  google.protobuf.Duration avg_delivery_time = 8;
+  float delivery_rate = 9;
+}
+
+// Enums для уведомлений
+
+// NotificationType представляет тип уведомления
+enum NotificationType {
+  NOTIFICATION_TYPE_UNSPECIFIED = 0;
+  NOTIFICATION_TYPE_FILE_CREATED = 1;
+  NOTIFICATION_TYPE_FILE_UPDATED = 2;
+  NOTIFICATION_TYPE_FILE_DELETED = 3;
+  NOTIFICATION_TYPE_FILE_MOVED = 4;
+  NOTIFICATION_TYPE_SYNC_STARTED = 5;
+  NOTIFICATION_TYPE_SYNC_COMPLETED = 6;
+  NOTIFICATION_TYPE_SYNC_FAILED = 7;
+  NOTIFICATION_TYPE_CONFLICT_DETECTED = 8;
+  NOTIFICATION_TYPE_CONFLICT_RESOLVED = 9;
+  NOTIFICATION_TYPE_NODE_CONNECTED = 10;
+  NOTIFICATION_TYPE_NODE_DISCONNECTED = 11;
+  NOTIFICATION_TYPE_STORAGE_LOW = 12;
+  NOTIFICATION_TYPE_STORAGE_FULL = 13;
+  NOTIFICATION_TYPE_BACKUP_COMPLETED = 14;
+  NOTIFICATION_TYPE_BACKUP_FAILED = 15;
+  NOTIFICATION_TYPE_SECURITY_ALERT = 16;
+  NOTIFICATION_TYPE_SYSTEM_MAINTENANCE = 17;
+  NOTIFICATION_TYPE_USER_INVITED = 18;
+  NOTIFICATION_TYPE_PERMISSION_CHANGED = 19;
+  NOTIFICATION_TYPE_QUOTA_WARNING = 20;
+  NOTIFICATION_TYPE_QUOTA_EXCEEDED = 21;
+}
+
+// NotificationPriority представляет приоритет уведомления
+enum NotificationPriority {
+  NOTIFICATION_PRIORITY_UNSPECIFIED = 0;
+  NOTIFICATION_PRIORITY_LOW = 1;
+  NOTIFICATION_PRIORITY_NORMAL = 2;
+  NOTIFICATION_PRIORITY_HIGH = 3;
+  NOTIFICATION_PRIORITY_CRITICAL = 4;
+  NOTIFICATION_PRIORITY_URGENT = 5;
+}
+
+// ActionType представляет тип действия
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  ACTION_TYPE_URL = 1;
+  ACTION_TYPE_API = 2;
+  ACTION_TYPE_DEEP_LINK = 3;
+  ACTION_TYPE_DISMISS = 4;
+  ACTION_TYPE_MARK_READ = 5;
+  ACTION_TYPE_DELETE = 6;
+  ACTION_TYPE_CONFIRM = 7;
+  ACTION_TYPE_CANCEL = 8;
+  ACTION_TYPE_RETRY = 9;
+  ACTION_TYPE_VIEW_DETAILS = 10;
+  ACTION_TYPE_DOWNLOAD = 11;
+  ACTION_TYPE_SHARE = 12;
+}

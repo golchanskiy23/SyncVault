@@ -1,0 +1,167 @@
+# SyncVault Microservices Makefile
+
+.PHONY: deps-start deps-stop services-start services-stop dev-start dev-stop build-services logs status clean
+
+# Переменные
+SERVICES = auth-service storage-service file-service sync-service notification-service api-gateway
+SERVICE_PORTS = 50056 50054 50052 50053 50055
+
+# Запуск зависимостей (базы данных)
+deps-start:
+	@echo "🚀 Starting dependencies..."
+	docker-compose up -d postgres redis mongodb
+	@echo "⏳ Waiting for services to be ready..."
+	sleep 10
+	@echo "✅ Dependencies started"
+
+# Остановка зависимостей
+deps-stop:
+	@echo "🛑 Stopping dependencies..."
+	docker-compose down
+	@echo "✅ Dependencies stopped"
+
+# Запуск всех микросервисов
+services-start:
+	@echo "🚀 Starting all microservices..."
+	@for service in $(SERVICES); do \
+		echo "Starting $$service..."; \
+		go run cmd/$$service/main.go & \
+	done
+	@echo "✅ All services started"
+	@echo "📊 Services running on ports: $(SERVICE_PORTS)"
+
+# Запуск API Gateway
+run-gateway:
+	@echo "🌐 Starting API Gateway..."
+	cd cmd/api-gateway && go run main.go
+
+# Запуск API Gateway с микросервисами
+dev-start-gateway:
+	@echo "🎯 Starting development environment with API Gateway..."
+	$(MAKE) deps-start
+	$(MAKE) services-start &
+	sleep 5
+	$(MAKE) run-gateway
+
+# Остановка всех микросервисов
+services-stop:
+	@echo "🛑 Stopping all microservices..."
+	@pkill -f "go run cmd/" || true
+	@echo "✅ Services stopped"
+
+# Полный запуск для разработки
+dev-start: deps-start services-start
+	@echo "🎉 Development environment ready!"
+	@echo ""
+	@echo "📋 Available services:"
+	@echo "  🗄️  PostgreSQL: localhost:5432"
+	@echo "  🔴 Redis: localhost:6379"
+	@echo "  🍃 MongoDB: localhost:27017"
+	@echo "  📊 Prometheus: http://localhost:9090"
+	@echo "  📈 Grafana: http://localhost:3000 (admin/admin123)"
+	@echo ""
+	@echo "🔧 Microservices:"
+	@echo "  🔐 Auth Service: localhost:50056"
+	@echo "  💾 Storage Service: localhost:50054"
+	@echo "  📁 File Service: localhost:50052"
+	@echo "  🔄 Sync Service: localhost:50053"
+	@echo "  🔔 Notification Service: localhost:50055"
+
+# Полная остановка
+dev-stop: services-stop deps-stop
+	@echo "🛑 Development environment stopped"
+
+# Сборка всех сервисов
+build-services:
+	@echo "🔨 Building all microservices..."
+	@for service in $(SERVICES); do \
+		echo "Building $$service..."; \
+		go build -o bin/$$service cmd/$$service/main.go; \
+	done
+	@echo "✅ All services built"
+
+# Просмотр логов
+logs:
+	@echo "📋 Showing logs..."
+	docker-compose logs -f
+
+# Проверка статуса
+status:
+	@echo "📊 Checking status..."
+	@echo ""
+	@echo "🗄️  Dependencies:"
+	@docker-compose ps
+	@echo ""
+	@echo "🔧 Microservices:"
+	@ps aux | grep "go run cmd/" | grep -v grep || echo "No services running"
+
+# Очистка
+clean: services-stop deps-stop
+	@echo "🧹 Cleaning up..."
+	docker-compose down -v --remove-orphans
+	rm -rf bin/
+	go clean -cache
+	@echo "✅ Clean completed"
+
+# Перезапуск
+restart: clean dev-start
+
+# Запуск отдельных сервисов
+run-auth:
+	@echo "🔐 Starting Auth Service..."
+	go run cmd/auth-service/main.go
+
+run-storage:
+	@echo "💾 Starting Storage Service..."
+	go run cmd/storage-service/main.go
+
+run-file:
+	@echo "📁 Starting File Service..."
+	go run cmd/file-service/main.go
+
+run-sync:
+	@echo "🔄 Starting Sync Service..."
+	go run cmd/sync-service/main.go
+
+run-notification:
+	@echo "🔔 Starting Notification Service..."
+	go run cmd/notification-service/main.go
+
+# Запуск зависимостей с мониторингом
+deps-start-monitoring:
+	@echo "🚀 Starting dependencies with monitoring..."
+	docker-compose up -d postgres redis mongodb prometheus grafana
+	@echo "⏳ Waiting for services to be ready..."
+	sleep 15
+	@echo "✅ Dependencies with monitoring started"
+
+# Помощь
+help:
+	@echo "📋 SyncVault Microservices Commands"
+	@echo ""
+	@echo "🚀 Development:"
+	@echo "  dev-start          - Start dependencies + all services"
+	@echo "  dev-stop           - Stop all services + dependencies"
+	@echo "  deps-start         - Start only dependencies (DB, Redis, MongoDB)"
+	@echo "  deps-stop          - Stop dependencies"
+	@echo "  services-start     - Start only microservices"
+	@echo "  services-stop      - Stop microservices"
+	@echo ""
+	@echo "🔧 Individual Services:"
+	@echo "  run-auth           - Start Auth Service"
+	@echo "  run-storage        - Start Storage Service"
+	@echo "  run-file           - Start File Service"
+	@echo "  run-sync           - Start Sync Service"
+	@echo "  run-notification   - Start Notification Service"
+	@echo ""
+	@echo "🔨 Build & Deploy:"
+	@echo "  build-services     - Build all microservices"
+	@echo "  restart            - Full restart (clean + start)"
+	@echo ""
+	@echo "📊 Management:"
+	@echo "  logs               - Show dependency logs"
+	@echo "  status             - Check status of all services"
+	@echo "  clean              - Clean everything"
+	@echo ""
+	@echo "📈 Monitoring:"
+	@echo "  deps-start-monitoring - Start dependencies with monitoring"

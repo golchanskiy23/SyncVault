@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package syncvault.v1.common;
+
+option go_package = "syncvault/internal/grpc/proto/common;commonv1";
+
+import "google/protobuf/timestamp.proto";
+//import "google/protobuf/duration.proto";
+
+// Общие типы для всех сервисов
+
+// FilePath представляет путь к файлу в системе
+message FilePath {
+  string path = 1;
+}
+
+// FileHash представляет хеш файла
+message FileHash {
+  string value = 1;
+}
+
+// StorageNodeID представляет идентификатор узла хранения
+message StorageNodeID {
+  string value = 1;
+}
+
+// FileID представляет идентификатор файла
+message FileID {
+  string value = 1;
+}
+
+// UserID представляет идентификатор пользователя
+message UserID {
+  string value = 1;
+}
+
+// NodeID представляет идентификатор узла
+message NodeID {
+  string value = 1;
+}
+
+// FileInfo представляет информацию о файле
+message FileInfo {
+  FileID file_id = 1;
+  FilePath file_path = 2;
+  FileHash file_hash = 3;
+  int64 file_size = 4;
+  FileStatus status = 5;
+  StorageNodeID storage_node_id = 6;
+  UserID user_id = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp modified_at = 9;
+  google.protobuf.Timestamp synced_at = 10;
+  int64 version = 11;
+}
+
+// FileStatus представляет статус файла
+enum FileStatus {
+  FILE_STATUS_UNSPECIFIED = 0;
+  FILE_STATUS_CREATED = 1;
+  FILE_STATUS_UPLOADED = 2;
+  FILE_STATUS_MODIFIED = 3;
+  FILE_STATUS_DELETED = 4;
+  FILE_STATUS_SYNCED = 5;
+  FILE_STATUS_CONFLICT = 6;
+}
+
+// SyncEventType представляет тип события синхронизации
+enum SyncEventType {
+  SYNC_EVENT_TYPE_UNSPECIFIED = 0;
+  SYNC_EVENT_TYPE_FILE_CREATED = 1;
+  SYNC_EVENT_TYPE_FILE_UPDATED = 2;
+  SYNC_EVENT_TYPE_FILE_DELETED = 3;
+  SYNC_EVENT_TYPE_FILE_MOVED = 4;
+  SYNC_EVENT_TYPE_CONFLICT_DETECTED = 5;
+  SYNC_EVENT_TYPE_CONFLICT_RESOLVED = 6;
+  SYNC_EVENT_TYPE_SYNC_STARTED = 7;
+  SYNC_EVENT_TYPE_SYNC_COMPLETED = 8;
+  SYNC_EVENT_TYPE_SYNC_FAILED = 9;
+}
+
+// Priority представляет приоритет операции
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_NORMAL = 2;
+  PRIORITY_HIGH = 3;
+  PRIORITY_CRITICAL = 4;
+}
+
+// SpaceInfo представляет информацию о пространстве хранения
+message SpaceInfo {
+  int64 total_space = 1;
+  int64 used_space = 2;
+  int64 free_space = 3;
+  int64 available_space = 4;
+}
+
+// ErrorDetail представляет детальную информацию об ошибке
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+// PaginationRequest представляет параметры пагинации
+message PaginationRequest {
+  int32 limit = 1;
+  string cursor = 2;
+}
+
+// PaginationResponse представляет результат пагинации
+message PaginationResponse {
+  string next_cursor = 1;
+  bool has_more = 2;
+  int32 total_count = 3;
+}
+
+// Filter представляет фильтр для запросов
+message Filter {
+  string field = 1;
+  string operator = 2;
+  string value = 3;
+}
+
+// Sort представляет сортировку
+message Sort {
+  string field = 1;
+  bool ascending = 2;
+}
+
+// QueryRequest представляет параметры запроса
+message QueryRequest {
+  repeated Filter filters = 1;
+  repeated Sort sorts = 2;
+  PaginationRequest pagination = 3;
+}

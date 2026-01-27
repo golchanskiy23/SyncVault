@@ -1,0 +1,452 @@
+syntax = "proto3";
+
+package syncvault.v1.sync;
+
+option go_package = "syncvault/internal/grpc/proto/sync;syncv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "common/types.proto";
+import "storage/storage.proto";
+
+// SyncService управляет синхронизацией файлов между узлами
+service SyncService {
+  // Bidirectional streaming для real-time синхронизации
+  rpc StartSync(stream SyncRequest) returns (stream SyncResponse);
+  
+  // Server streaming для подписки на события синхронизации
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream SyncEventResponse);
+  
+  // Получение статуса синхронизации
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);
+  
+  // Принудительная синхронизация
+  rpc ForceSync(ForceSyncRequest) returns (ForceSyncResponse);
+  
+  // Отмена синхронизации
+  rpc CancelSync(CancelSyncRequest) returns (google.protobuf.Empty);
+  
+  // Получение истории синхронизации
+  rpc GetSyncHistory(GetSyncHistoryRequest) returns (GetSyncHistoryResponse);
+  
+  // Получение конфликтов синхронизации
+  rpc GetSyncConflicts(GetSyncConflictsRequest) returns (GetSyncConflictsResponse);
+  
+  // Разрешение конфликта синхронизации
+  rpc ResolveConflict(ResolveConflictRequest) returns (ResolveConflictResponse);
+  
+  // Проверка здоровья сервиса синхронизации
+  rpc HealthCheck(google.protobuf.Empty) returns (HealthCheckResponse);
+}
+
+// SyncRequest представляет запрос к сервису синхронизации
+message SyncRequest {
+  oneof request {
+    SyncStart start = 1;
+    SyncAck ack = 2;
+    SyncComplete complete = 3;
+    SyncError error = 4;
+    SyncPing ping = 5;
+    SyncPause pause = 6;
+    SyncResume resume = 7;
+    SyncStatusRequest status = 8;
+  }
+}
+
+// SyncStart начинает сессию синхронизации
+message SyncStart {
+  string node_id = 1;
+  common.NodeID target_node = 2;
+  google.protobuf.Timestamp since = 3;
+  repeated string file_ids = 4;
+  common.Priority priority = 5;
+  bool force_full_sync = 6;
+  map<string, string> options = 7;
+  SyncMode mode = 8;
+  google.protobuf.Duration timeout = 9;
+  repeated string exclude_patterns = 10;
+}
+
+// SyncAck подтверждает обработку события
+message SyncAck {
+  string event_id = 1;
+  bool success = 2;
+  string error_message = 3;
+  google.protobuf.Timestamp processed_at = 4;
+  int64 processing_time_ms = 5;
+}
+
+// SyncComplete завершает сессию синхронизации
+message SyncComplete {
+  string node_id = 1;
+  string session_id = 2;
+  int32 events_processed = 3;
+  int32 events_failed = 4;
+  google.protobuf.Duration duration = 5;
+  int64 bytes_transferred = 6;
+  repeated string failed_file_ids = 7;
+  SyncResult result = 8;
+  map<string, string> statistics = 9;
+}
+
+// SyncError сообщает об ошибке синхронизации
+message SyncError {
+  string event_id = 1;
+  string session_id = 2;
+  string error_code = 3;
+  string error_message = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  map<string, string> context = 6;
+  bool recoverable = 7;
+  int32 retry_count = 8;
+}
+
+// SyncPing проверяет соединение
+message SyncPing {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int32 sequence_number = 3;
+  string session_id = 4;
+}
+
+// SyncPause приостанавливает синхронизацию
+message SyncPause {
+  string session_id = 1;
+  string reason = 2;
+  google.protobuf.Duration duration = 3;
+}
+
+// SyncResume возобновляет синхронизацию
+message SyncResume {
+  string session_id = 1;
+}
+
+// SyncStatusRequest запрашивает статус синхронизации
+message SyncStatusRequest {
+  string session_id = 1;
+}
+
+// SyncResponse представляет ответ от сервиса синхронизации
+message SyncResponse {
+  oneof response {
+    SyncEvent event = 1;
+    SyncStatus status = 2;
+    SyncPong pong = 3;
+    SyncComplete complete = 4;
+    SyncPaused paused = 5;
+    SyncResumed resumed = 6;
+    SyncError error = 7;
+  }
+}
+
+// SyncEvent представляет событие синхронизации
+message SyncEvent {
+  string event_id = 1;
+  string session_id = 2;
+  common.SyncEventType type = 3;
+  string source_node_id = 4;
+  string target_node_id = 5;
+  storage.FileMetadata file_metadata = 6;
+  google.protobuf.Timestamp timestamp = 7;
+  common.Priority priority = 8;
+  map<string, string> metadata = 9;
+  int32 retry_count = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  string parent_event_id = 12;
+}
+
+// SyncStatus представляет статус синхронизации
+message SyncStatus {
+  string node_id = 1;
+  string session_id = 2;
+  int32 pending_events = 3;
+  int32 processing_events = 4;
+  int32 completed_events = 5;
+  int32 failed_events = 6;
+  google.protobuf.Timestamp last_sync = 7;
+  google.protobuf.Duration avg_processing_time = 8;
+  float success_rate = 9;
+  SyncState state = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Duration elapsed_time = 12;
+  int64 bytes_transferred = 13;
+  float transfer_rate_bps = 14;
+  int32 active_connections = 15;
+}
+
+// SyncPong ответ на ping
+message SyncPong {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int32 sequence_number = 3;
+  SyncStatus status = 4;
+  string session_id = 5;
+}
+
+// SyncPaused уведомление о паузе
+message SyncPaused {
+  string session_id = 1;
+  string reason = 2;
+  google.protobuf.Duration duration = 3;
+  google.protobuf.Timestamp paused_at = 4;
+}
+
+// SyncResumed уведомление о возобновлении
+message SyncResumed {
+  string session_id = 1;
+  google.protobuf.Timestamp resumed_at = 2;
+}
+
+// SubscribeEventsRequest запрос на подписку на события
+message SubscribeEventsRequest {
+  string node_id = 1;
+  repeated common.SyncEventType event_types = 2;
+  google.protobuf.Timestamp since = 3;
+  repeated string file_ids = 4;
+  repeated string node_ids = 5;
+  map<string, string> filters = 6;
+  google.protobuf.Duration timeout = 7;
+}
+
+// SyncEventResponse ответ с событием
+message SyncEventResponse {
+  oneof response {
+    SyncEvent event = 1;
+    SubscriptionStatus status = 2;
+    Heartbeat heartbeat = 3;
+    SubscriptionError error = 4;
+  }
+}
+
+// SubscriptionStatus представляет статус подписки
+message SubscriptionStatus {
+  string subscription_id = 1;
+  bool active = 2;
+  int32 queued_events = 3;
+  int32 processed_events = 4;
+  google.protobuf.Timestamp subscribed_at = 5;
+  google.protobuf.Timestamp last_activity = 6;
+  repeated common.SyncEventType subscribed_types = 7;
+}
+
+// Heartbeat представляет heartbeat сообщение
+message Heartbeat {
+  google.protobuf.Timestamp timestamp = 1;
+  int32 sequence_number = 2;
+  SyncStatus status = 3;
+}
+
+// SubscriptionError представляет ошибку подписки
+message SubscriptionError {
+  string error_code = 1;
+  string error_message = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  bool recoverable = 4;
+}
+
+// GetSyncStatusRequest запрос статуса синхронизации
+message GetSyncStatusRequest {
+  string node_id = 1;
+  string session_id = 2;
+  bool include_details = 3;
+}
+
+// GetSyncStatusResponse ответ со статусом синхронизации
+message GetSyncStatusResponse {
+  repeated SyncStatus statuses = 1;
+  SyncSummary summary = 2;
+}
+
+// SyncSummary представляет сводную информацию о синхронизации
+message SyncSummary {
+  int32 total_sessions = 1;
+  int32 active_sessions = 2;
+  int32 total_events = 3;
+  int32 pending_events = 4;
+  int32 failed_events = 5;
+  float overall_success_rate = 6;
+  google.protobuf.Timestamp last_activity = 7;
+  int64 total_bytes_transferred = 8;
+}
+
+// ForceSyncRequest запрос на принудительную синхронизацию
+message ForceSyncRequest {
+  string source_node_id = 1;
+  string target_node_id = 2;
+  repeated string file_ids = 3;
+  common.Priority priority = 4;
+  bool force_conflict_resolution = 5;
+  map<string, string> options = 6;
+}
+
+// ForceSyncResponse ответ на принудительную синхронизацию
+message ForceSyncResponse {
+  string session_id = 1;
+  SyncStatus status = 2;
+  google.protobuf.Timestamp started_at = 3;
+}
+
+// CancelSyncRequest запрос на отмену синхронизации
+message CancelSyncRequest {
+  string session_id = 1;
+  string reason = 2;
+  bool graceful = 3;
+}
+
+// GetSyncHistoryRequest запрос истории синхронизации
+message GetSyncHistoryRequest {
+  string node_id = 1;
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+  repeated common.SyncEventType event_types = 4;
+  common.QueryRequest query = 5;
+}
+
+// GetSyncHistoryResponse ответ с историей синхронизации
+message GetSyncHistoryResponse {
+  repeated SyncHistoryEntry entries = 1;
+  common.PaginationResponse pagination = 2;
+}
+
+// SyncHistoryEntry представляет запись в истории синхронизации
+message SyncHistoryEntry {
+  string event_id = 1;
+  common.SyncEventType type = 2;
+  string source_node_id = 3;
+  string target_node_id = 4;
+  storage.FileMetadata file_metadata = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  SyncResult result = 7;
+  google.protobuf.Duration duration = 8;
+  string error_message = 9;
+  int32 retry_count = 10;
+}
+
+// GetSyncConflictsRequest запрос конфликтов синхронизации
+message GetSyncConflictsRequest {
+  string node_id = 1;
+  ConflictStatus status = 2;
+  google.protobuf.Timestamp from = 3;
+  google.protobuf.Timestamp to = 4;
+  common.QueryRequest query = 5;
+}
+
+// GetSyncConflictsResponse ответ с конфликтами
+message GetSyncConflictsResponse {
+  repeated SyncConflict conflicts = 1;
+  common.PaginationResponse pagination = 2;
+}
+
+// SyncConflict представляет конфликт синхронизации
+message SyncConflict {
+  string conflict_id = 1;
+  string file_id = 2;
+  string file_path = 3;
+  string source_node_id = 4;
+  string target_node_id = 5;
+  ConflictType type = 6;
+  ConflictStatus status = 7;
+  google.protobuf.Timestamp detected_at = 8;
+  storage.FileMetadata source_metadata = 9;
+  storage.FileMetadata target_metadata = 10;
+  string resolution_strategy = 11;
+  string resolved_by = 12;
+  google.protobuf.Timestamp resolved_at = 13;
+  map<string, string> context = 14;
+}
+
+// ResolveConflictRequest запрос на разрешение конфликта
+message ResolveConflictRequest {
+  string conflict_id = 1;
+  ConflictResolution resolution = 2;
+  string resolved_by = 3;
+  string comment = 4;
+}
+
+// ResolveConflictResponse ответ на разрешение конфликта
+message ResolveConflictResponse {
+  bool resolved = 1;
+  string conflict_id = 2;
+  ConflictResolution applied_resolution = 3;
+  google.protobuf.Timestamp resolved_at = 4;
+}
+
+// HealthCheckResponse ответ health check
+message HealthCheckResponse {
+  bool healthy = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  map<string, string> details = 4;
+  repeated string dependencies = 5;
+}
+
+// Enums для синхронизации
+
+// SyncMode представляет режим синхронизации
+enum SyncMode {
+  SYNC_MODE_UNSPECIFIED = 0;
+  SYNC_MODE_INCREMENTAL = 1;
+  SYNC_MODE_FULL = 2;
+  SYNC_MODE_BIDIRECTIONAL = 3;
+  SYNC_MODE_UNIDIRECTIONAL = 4;
+  SYNC_MODE_MIRROR = 5;
+}
+
+// SyncState представляет состояние синхронизации
+enum SyncState {
+  SYNC_STATE_UNSPECIFIED = 0;
+  SYNC_STATE_IDLE = 1;
+  SYNC_STATE_CONNECTING = 2;
+  SYNC_STATE_SYNCING = 3;
+  SYNC_STATE_PAUSED = 4;
+  SYNC_STATE_ERROR = 5;
+  SYNC_STATE_COMPLETED = 6;
+  SYNC_STATE_CANCELLED = 7;
+}
+
+// SyncResult представляет результат синхронизации
+enum SyncResult {
+  SYNC_RESULT_UNSPECIFIED = 0;
+  SYNC_RESULT_SUCCESS = 1;
+  SYNC_RESULT_PARTIAL_SUCCESS = 2;
+  SYNC_RESULT_FAILED = 3;
+  SYNC_RESULT_CANCELLED = 4;
+  SYNC_RESULT_TIMEOUT = 5;
+}
+
+// ConflictType представляет тип конфликта
+enum ConflictType {
+  CONFLICT_TYPE_UNSPECIFIED = 0;
+  CONFLICT_TYPE_CONTENT = 1;
+  CONFLICT_TYPE_METADATA = 2;
+  CONFLICT_TYPE_PERMISSION = 3;
+  CONFLICT_TYPE_VERSION = 4;
+  CONFLICT_TYPE_DELETE = 5;
+  CONFLICT_TYPE_RENAME = 6;
+}
+
+// ConflictStatus представляет статус конфликта
+enum ConflictStatus {
+  CONFLICT_STATUS_UNSPECIFIED = 0;
+  CONFLICT_STATUS_DETECTED = 1;
+  CONFLICT_STATUS_PENDING_RESOLUTION = 2;
+  CONFLICT_STATUS_RESOLVED = 3;
+  CONFLICT_STATUS_IGNORED = 4;
+  CONFLICT_STATUS_ESCALATED = 5;
+}
+
+// ConflictResolution представляет стратегию разрешения конфликта
+enum ConflictResolution {
+  CONFLICT_RESOLUTION_UNSPECIFIED = 0;
+  CONFLICT_RESOLUTION_KEEP_SOURCE = 1;
+  CONFLICT_RESOLUTION_KEEP_TARGET = 2;
+  CONFLICT_RESOLUTION_KEEP_NEWER = 3;
+  CONFLICT_RESOLUTION_KEEP_OLDER = 4;
+  CONFLICT_RESOLUTION_KEEP_LARGER = 5;
+  CONFLICT_RESOLUTION_KEEP_SMALLER = 6;
+  CONFLICT_RESOLUTION_MERGE = 7;
+  CONFLICT_RESOLUTION_RENAME_TARGET = 8;
+  CONFLICT_RESOLUTION_RENAME_SOURCE = 9;
+  CONFLICT_RESOLUTION_MANUAL = 10;
+}
