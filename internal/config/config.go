@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -37,6 +38,7 @@ type Config struct {
 	Redis struct {
 		Host         string        `json:"host" yaml:"host"`
 		Port         int           `json:"port" yaml:"port"`
+		Address      string        `json:"address" yaml:"address"`
 		Password     string        `json:"password" yaml:"password"`
 		DB           int           `json:"db" yaml:"db"`
 		PoolSize     int           `json:"poolSize" yaml:"poolSize"`
@@ -90,6 +92,14 @@ type Config struct {
 		BatchSize           int           `json:"batchSize" yaml:"batchSize"`
 		BatchTimeout        time.Duration `json:"batchTimeout" yaml:"batchTimeout"`
 	} `json:"kafka" yaml:"kafka"`
+
+	JWT struct {
+		AccessSecret  string        `json:"accessSecret" yaml:"accessSecret"`
+		RefreshSecret string        `json:"refreshSecret" yaml:"refreshSecret"`
+		AccessTTL     time.Duration `json:"accessTTL" yaml:"accessTTL"`
+		RefreshTTL    time.Duration `json:"refreshTTL" yaml:"refreshTTL"`
+		Issuer        string        `json:"issuer" yaml:"issuer"`
+	} `json:"jwt" yaml:"jwt"`
 }
 
 func (c *Config) Address() string {
@@ -125,6 +135,7 @@ func Default() *Config {
 	// Redis настройки по умолчанию
 	cfg.Redis.Host = "localhost"
 	cfg.Redis.Port = 6379
+	cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
 	cfg.Redis.Password = ""
 	cfg.Redis.DB = 0
 	cfg.Redis.PoolSize = 10
@@ -171,6 +182,19 @@ func Default() *Config {
 	cfg.Kafka.RetryBackoff = 1 * time.Second
 	cfg.Kafka.BatchSize = 100
 	cfg.Kafka.BatchTimeout = 1 * time.Second
+
+	// JWT настройки по умолчанию
+	cfg.JWT.AccessSecret = os.Getenv("JWT_ACCESS_SECRET")
+	if cfg.JWT.AccessSecret == "" {
+		cfg.JWT.AccessSecret = "your-access-secret-key-change-in-production"
+	}
+	cfg.JWT.RefreshSecret = os.Getenv("JWT_REFRESH_SECRET")
+	if cfg.JWT.RefreshSecret == "" {
+		cfg.JWT.RefreshSecret = "your-refresh-secret-key-change-in-production"
+	}
+	cfg.JWT.AccessTTL = 15 * time.Minute
+	cfg.JWT.RefreshTTL = 30 * 24 * time.Hour
+	cfg.JWT.Issuer = "syncvault"
 
 	return cfg
 }
@@ -240,5 +264,31 @@ func LoadFromFile(filename string) (*Config, error) {
 		cfg.Kafka.BatchTimeout = 1 * time.Second
 	}
 
+	// Добавляем Redis адрес для удобства (если не установлен)
+	if cfg.Redis.Address == "" {
+		cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+	}
+
 	return &cfg, nil
+}
+
+// LoadConfig загружает конфигурацию из файла или переменных окружения
+func LoadConfig() *Config {
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "internal/config/config.yml"
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		log.Printf("Failed to load config from file %s: %v, using defaults", configPath, err)
+		return Default()
+	}
+
+	// Добавляем Redis адрес для удобства (если не установлен)
+	if cfg.Redis.Address == "" {
+		cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+	}
+
+	return cfg
 }

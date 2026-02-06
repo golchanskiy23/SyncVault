@@ -2,19 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	authv1 "syncvault/internal/grpc/proto/auth"
+	"syncvault/internal/auth"
+	"syncvault/internal/config"
 	"syncvault/internal/storage"
 )
 
@@ -22,29 +28,56 @@ import (
 type AuthService struct {
 	authv1.UnimplementedAuthServiceServer
 	deviceManager *storage.DeviceManager
+	jwtService    *auth.JWTService
+	config        *config.Config
 }
 
 func NewAuthService() *AuthService {
+	// Загружаем конфигурацию
+	cfg := config.LoadConfig()
+	
+	// Создаем Redis клиент
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	
+	// Создаем JWT конфигурацию
+	jwtConfig := auth.DefaultJWTConfig()
+	jwtConfig.AccessSecret = cfg.JWT.AccessSecret
+	jwtConfig.RefreshSecret = cfg.JWT.RefreshSecret
+	
+	// Создаем JWT сервис
+	jwtService := auth.NewJWTService(jwtConfig, rdb)
+	
 	return &AuthService{
-		deviceManager: storage.NewDeviceManager(nil), // Здесь будет конфиг
+		deviceManager: storage.NewDeviceManager(nil),
+		jwtService:    jwtService,
+		config:        cfg,
 	}
 }
 
 func (s *AuthService) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {
 	log.Printf("Login attempt for user: %s", req.Email)
 
-	// Имитация аутентификации
 	if req.Email == "test@example.com" && req.Password == "password123" {
-		token := fmt.Sprintf("jwt_token_%d", time.Now().UnixNano())
-		refreshToken := fmt.Sprintf("refresh_token_%d", time.Now().UnixNano())
+		userID := "user_123"
+		role := "user"
+		
+		tokenPair, err := s.jwtService.GenerateTokenPair(ctx, userID, req.Email, role)
+		if err != nil {
+			log.Printf("Failed to generate tokens: %v", err)
+			return nil, fmt.Errorf("authentication failed")
+		}
 
 		return &authv1.LoginResponse{
-			AccessToken:  token,
-			RefreshToken: refreshToken,
-			TokenType:    "Bearer",
-			ExpiresIn:    3600,
+			AccessToken:  tokenPair.AccessToken,
+			RefreshToken: tokenPair.RefreshToken,
+			TokenType:    tokenPair.TokenType,
+			ExpiresIn:    int32(tokenPair.ExpiresIn),
 			User: &authv1.User{
-				UserId:    "user_123",
+				UserId:    userID,
 				Email:     req.Email,
 				Username:  "testuser",
 				FirstName: "Test",
@@ -59,134 +92,190 @@ func (s *AuthService) Login(ctx context.Context, req *authv1.LoginRequest) (*aut
 	return nil, fmt.Errorf("invalid credentials")
 }
 
-func (s *AuthService) Register(ctx context.Context, req *authv1.RegisterRequest) (*authv1.RegisterResponse, error) {
-	log.Printf("Registration attempt for user: %s", req.Email)
-
-	// Имитация регистрации
-	userID := fmt.Sprintf("user_%d", time.Now().UnixNano())
-
-	return &authv1.RegisterResponse{
-		User: &authv1.User{
-			UserId:    userID,
-			Email:     req.Email,
-			Username:  req.Username,
-			FirstName: req.FirstName,
-			LastName:  req.LastName,
-			IsActive:  true,
-			CreatedAt: timestamppb.Now(),
-			UpdatedAt: timestamppb.Now(),
-		},
-		Message: "User registered successfully",
-	}, nil
-}
-
-func (s *AuthService) RefreshToken(ctx context.Context, req *authv1.RefreshTokenRequest) (*authv1.RefreshTokenResponse, error) {
-	log.Printf("Token refresh request")
-
-	// Имитация обновления токена
-	newToken := fmt.Sprintf("new_jwt_token_%d", time.Now().UnixNano())
-
-	return &authv1.RefreshTokenResponse{
-		AccessToken: newToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   3600,
-	}, nil
-}
-
-func (s *AuthService) Logout(ctx context.Context, req *authv1.LogoutRequest) (*authv1.LogoutResponse, error) {
-	log.Printf("Logout request for user: %s", req.UserId)
-
-	return &authv1.LogoutResponse{
-		Success: true,
-		Message: "Logged out successfully",
-	}, nil
-}
-
-func (s *AuthService) ValidateToken(ctx context.Context, req *authv1.ValidateTokenRequest) (*authv1.ValidateTokenResponse, error) {
-	log.Printf("Token validation request")
-
-	// Имитация валидации токена
-	if req.AccessToken == "jwt_token_valid" {
-		return &authv1.ValidateTokenResponse{
-			Valid: true,
-			User: &authv1.User{
-				UserId:    "user_123",
-				Email:     "test@example.com",
-				Username:  "testuser",
-				FirstName: "Test",
-				LastName:  "User",
-				IsActive:  true,
-				CreatedAt: timestamppb.Now(),
-				UpdatedAt: timestamppb.Now(),
-			},
-			ExpiresAt: timestamppb.Now(),
-		}, nil
-	}
-
-	return &authv1.ValidateTokenResponse{
-		Valid:   false,
-		Message: "Invalid token",
-	}, nil
-}
-
-func (s *AuthService) GetUserProfile(ctx context.Context, req *authv1.GetUserProfileRequest) (*authv1.GetUserProfileResponse, error) {
-	log.Printf("Getting user profile for: %s", req.UserId)
-
-	// Имитация получения профиля
-	return &authv1.GetUserProfileResponse{
-		User: &authv1.User{
-			UserId:    req.UserId,
-			Email:     "test@example.com",
-			Username:  "testuser",
-			FirstName: "Test",
-			LastName:  "User",
-			IsActive:  true,
-			CreatedAt: timestamppb.Now(),
-			UpdatedAt: timestamppb.Now(),
-		},
-	}, nil
-}
-
-func (s *AuthService) UpdateUserProfile(ctx context.Context, req *authv1.UpdateUserProfileRequest) (*authv1.UpdateUserProfileResponse, error) {
-	log.Printf("Updating user profile for: %s", req.UserId)
-
-	return &authv1.UpdateUserProfileResponse{
-		User: &authv1.User{
-			UserId:    req.UserId,
-			Email:     req.Email,
-			Username:  req.Username,
-			FirstName: req.FirstName,
-			LastName:  req.LastName,
-			IsActive:  true,
-			CreatedAt: timestamppb.Now(),
-			UpdatedAt: timestamppb.Now(),
-		},
-		Updated: true,
-	}, nil
-}
-
-func (s *AuthService) ChangePassword(ctx context.Context, req *authv1.ChangePasswordRequest) (*authv1.ChangePasswordResponse, error) {
-	log.Printf("Password change request for user: %s", req.UserId)
-
-	return &authv1.ChangePasswordResponse{
-		Success: true,
-		Message: "Password changed successfully",
-	}, nil
-}
-
-func (s *AuthService) ResetPassword(ctx context.Context, req *authv1.ResetPasswordRequest) (*authv1.ResetPasswordResponse, error) {
-	log.Printf("Password reset request for email: %s", req.Email)
-
-	return &authv1.ResetPasswordResponse{
-		Success:   true,
-		Message:   "Password reset email sent",
-		Token:     fmt.Sprintf("reset_token_%d", time.Now().UnixNano()),
-		ExpiresAt: timestamppb.Now(),
-	}, nil
-}
-
 func main() {
 	log.Println("Starting Auth Service microservice...")
+
+	// Запускаем HTTP сервер в отдельной горутине
+	go func() {
+		log.Println("Starting HTTP Auth Service...")
+		
+		// Загружаем конфигурацию
+		cfg := config.LoadConfig()
+		
+		// Создаем Redis клиент
+		rdb := redis.NewClient(&redis.Options{
+			Addr:     cfg.Redis.Address,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		})
+		
+		// Создаем JWT конфигурацию
+		jwtConfig := auth.DefaultJWTConfig()
+		jwtConfig.AccessSecret = cfg.JWT.AccessSecret
+		jwtConfig.RefreshSecret = cfg.JWT.RefreshSecret
+		jwtConfig.AccessTTL = cfg.JWT.AccessTTL
+		jwtConfig.RefreshTTL = cfg.JWT.RefreshTTL
+		jwtConfig.Issuer = cfg.JWT.Issuer
+		
+		// Создаем JWT сервис
+		jwtService := auth.NewJWTService(jwtConfig, rdb)
+
+		// Создаем HTTP сервер
+		router := chi.NewRouter()
+		
+		// Middleware
+		router.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				next.ServeHTTP(w, r)
+			})
+		})
+		
+		// Health check
+		router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+			response := map[string]interface{}{
+				"status":    "healthy",
+				"timestamp": time.Now().UTC(),
+				"service":   "auth-service",
+				"version":   "1.0.0",
+			}
+			json.NewEncoder(w).Encode(response)
+		})
+		
+		// Login endpoint
+		router.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			
+			if req["email"] == "test@example.com" && req["password"] == "password123" {
+				tokenPair, err := jwtService.GenerateTokenPair(context.Background(), "user_123", req["email"], "user")
+				if err != nil {
+					http.Error(w, "Authentication failed", http.StatusInternalServerError)
+					return
+				}
+				
+				response := map[string]interface{}{
+					"access_token":  tokenPair.AccessToken,
+					"refresh_token": tokenPair.RefreshToken,
+					"token_type":    tokenPair.TokenType,
+					"expires_in":    tokenPair.ExpiresIn,
+					"user": map[string]interface{}{
+						"id":       "user_123",
+						"email":    req["email"],
+						"username": "testuser",
+						"is_active": true,
+					},
+				}
+				json.NewEncoder(w).Encode(response)
+			} else {
+				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+			}
+		})
+		
+		// Token validation endpoint
+		router.Post("/validate", func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			
+			claims, err := jwtService.ValidateToken(req["access_token"], auth.AccessTokenType)
+			if err != nil {
+				response := map[string]interface{}{
+					"valid":   false,
+					"message": "Invalid token: " + err.Error(),
+				}
+				json.NewEncoder(w).Encode(response)
+				return
+			}
+			
+			response := map[string]interface{}{
+				"valid": true,
+				"user": map[string]interface{}{
+					"id":       claims.UserID,
+					"email":    claims.Email,
+					"username": "testuser",
+					"is_active": true,
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		})
+		
+		// Token refresh endpoint
+		router.Post("/refresh", func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			
+			tokenPair, err := jwtService.RefreshTokens(r.Context(), req["refresh_token"])
+			if err != nil {
+				http.Error(w, "Token refresh failed", http.StatusUnauthorized)
+				return
+			}
+			
+			response := map[string]interface{}{
+				"access_token": tokenPair.AccessToken,
+				"token_type":   tokenPair.TokenType,
+				"expires_in":   tokenPair.ExpiresIn,
+			}
+			json.NewEncoder(w).Encode(response)
+		})
+		
+		// Protected endpoint
+		router.Group(func(r chi.Router) {
+			r.Use(jwtService.AuthMiddleware)
+			r.Get("/profile", func(w http.ResponseWriter, r *http.Request) {
+				userID, ok := auth.GetUserIDFromContext(r.Context())
+				if !ok {
+					http.Error(w, "User not found", http.StatusUnauthorized)
+					return
+				}
+				
+				response := map[string]interface{}{
+					"id":       userID,
+					"email":    "test@example.com",
+					"username": "testuser",
+					"is_active": true,
+				}
+				json.NewEncoder(w).Encode(response)
+			})
+			
+			r.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
+				userID, ok := auth.GetUserIDFromContext(r.Context())
+				if !ok {
+					http.Error(w, "User not found", http.StatusUnauthorized)
+					return
+				}
+				
+				err := jwtService.Logout(r.Context(), userID)
+				if err != nil {
+					http.Error(w, "Logout failed", http.StatusInternalServerError)
+					return
+				}
+				
+				response := map[string]interface{}{
+					"success": true,
+					"message": "Logged out successfully",
+				}
+				json.NewEncoder(w).Encode(response)
+			})
+		})
+
+		port := "50056"
+		if envPort := os.Getenv("AUTH_SERVICE_PORT"); envPort != "" {
+			port = envPort
+		}
+
+		if err := http.ListenAndServe(":"+port, router); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
 
 	// Создаем gRPC сервер
 	grpcServer := grpc.NewServer()
@@ -199,8 +288,8 @@ func main() {
 	reflection.Register(grpcServer)
 
 	// Настраиваем порт
-	port := "50056"
-	if envPort := os.Getenv("AUTH_SERVICE_PORT"); envPort != "" {
+	port := "50057"
+	if envPort := os.Getenv("AUTH_GRPC_SERVICE_PORT"); envPort != "" {
 		port = envPort
 	}
 
@@ -210,7 +299,7 @@ func main() {
 		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
 
-	log.Printf("Auth Service listening on port %s", port)
+	log.Printf("Auth gRPC Service listening on port %s", port)
 
 	// Запускаем сервер в горутине
 	go func() {
@@ -242,60 +331,4 @@ func main() {
 	case <-stopped:
 		log.Println("Auth Service stopped gracefully")
 	}
-}
-
-// Методы для работы с устройствами пользователя
-
-// RegisterDevice регистрирует новое устройство для пользователя
-func (s *AuthService) RegisterDevice(ctx context.Context, userID, deviceName, deviceType string) (*storage.DeviceStorage, error) {
-	log.Printf("Registering device %s for user %s", deviceName, userID)
-
-	// Создаем уникальный путь для устройства
-	storagePath := fmt.Sprintf("/tmp/syncvault_%s_%s", userID, deviceName)
-
-	// Регистрируем устройство через Device Manager
-	device, err := s.deviceManager.RegisterDevice(ctx, userID, deviceName, storagePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to register device: %w", err)
-	}
-
-	log.Printf("Device registered successfully: %s", device.DeviceID)
-	return device, nil
-}
-
-// GetUserDevices возвращает все устройства пользователя
-func (s *AuthService) GetUserDevices(userID string) []*storage.DeviceStorage {
-	log.Printf("Getting devices for user: %s", userID)
-
-	devices := s.deviceManager.ListUserDevices(userID)
-	log.Printf("Found %d devices for user %s", len(devices), userID)
-
-	return devices
-}
-
-// RevokeDevice отзывает доступ устройства
-func (s *AuthService) RevokeDevice(ctx context.Context, userID, deviceID string) error {
-	log.Printf("Revoking device access: %s for user %s", deviceID, userID)
-
-	// Здесь должна быть логика отзыва устройства
-	// Например, удаление из Device Manager или изменение статуса
-
-	return nil
-}
-
-// GetDeviceStatus получает статус устройства
-func (s *AuthService) GetDeviceStatus(ctx context.Context, userID, deviceID string) (*storage.DeviceStorage, error) {
-	log.Printf("Getting device status: %s for user %s", deviceID, userID)
-
-	device, err := s.deviceManager.GetDevice(deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("device not found: %w", err)
-	}
-
-	// Проверяем, что устройство принадлежит пользователю
-	if device.UserID != userID {
-		return nil, fmt.Errorf("access denied: device does not belong to user")
-	}
-
-	return device, nil
 }
