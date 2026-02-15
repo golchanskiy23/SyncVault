@@ -2,12 +2,32 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// GoogleDriveConfig содержит конфигурацию Google Drive
+type GoogleDriveConfig struct {
+	OAuth       *GoogleOAuthConfig `yaml:"oauth" json:"oauth"`
+	APIBaseURL  string             `yaml:"api_base_url" json:"api_base_url"`
+	UploadURL   string             `yaml:"upload_url" json:"upload_url"`
+	MaxFileSize int64              `yaml:"max_file_size" json:"max_file_size"`
+	ChunkSize   int                `yaml:"chunk_size" json:"chunk_size"`
+	RetryCount  int                `yaml:"retry_count" json:"retry_count"`
+	RetryDelay  time.Duration      `yaml:"retry_delay" json:"retry_delay"`
+}
+
+// GoogleOAuthConfig содержит конфигурацию Google OAuth
+type GoogleOAuthConfig struct {
+	ClientID     string   `yaml:"client_id" json:"client_id"`
+	ClientSecret string   `yaml:"client_secret" json:"client_secret"`
+	RedirectURL  string   `yaml:"redirect_url" json:"redirect_url"`
+	Scopes       []string `yaml:"scopes" json:"scopes"`
+}
 
 type Config struct {
 	HTTP struct {
@@ -37,6 +57,7 @@ type Config struct {
 	Redis struct {
 		Host         string        `json:"host" yaml:"host"`
 		Port         int           `json:"port" yaml:"port"`
+		Address      string        `json:"address" yaml:"address"`
 		Password     string        `json:"password" yaml:"password"`
 		DB           int           `json:"db" yaml:"db"`
 		PoolSize     int           `json:"poolSize" yaml:"poolSize"`
@@ -90,6 +111,18 @@ type Config struct {
 		BatchSize           int           `json:"batchSize" yaml:"batchSize"`
 		BatchTimeout        time.Duration `json:"batchTimeout" yaml:"batchTimeout"`
 	} `json:"kafka" yaml:"kafka"`
+
+	JWT struct {
+		AccessSecret  string        `json:"accessSecret" yaml:"accessSecret"`
+		RefreshSecret string        `json:"refreshSecret" yaml:"refreshSecret"`
+		AccessTTL     time.Duration `json:"accessTTL" yaml:"accessTTL"`
+		RefreshTTL    time.Duration `json:"refreshTTL" yaml:"refreshTTL"`
+		Issuer        string        `json:"issuer" yaml:"issuer"`
+	} `json:"jwt" yaml:"jwt"`
+
+	OAuth struct {
+		GoogleDrive *GoogleDriveConfig `json:"google_drive" yaml:"google_drive"`
+	} `json:"oauth" yaml:"oauth"`
 }
 
 func (c *Config) Address() string {
@@ -125,6 +158,7 @@ func Default() *Config {
 	// Redis настройки по умолчанию
 	cfg.Redis.Host = "localhost"
 	cfg.Redis.Port = 6379
+	cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
 	cfg.Redis.Password = ""
 	cfg.Redis.DB = 0
 	cfg.Redis.PoolSize = 10
@@ -171,6 +205,19 @@ func Default() *Config {
 	cfg.Kafka.RetryBackoff = 1 * time.Second
 	cfg.Kafka.BatchSize = 100
 	cfg.Kafka.BatchTimeout = 1 * time.Second
+
+	// JWT настройки по умолчанию
+	cfg.JWT.AccessSecret = os.Getenv("JWT_ACCESS_SECRET")
+	if cfg.JWT.AccessSecret == "" {
+		cfg.JWT.AccessSecret = "your-access-secret-key-change-in-production"
+	}
+	cfg.JWT.RefreshSecret = os.Getenv("JWT_REFRESH_SECRET")
+	if cfg.JWT.RefreshSecret == "" {
+		cfg.JWT.RefreshSecret = "your-refresh-secret-key-change-in-production"
+	}
+	cfg.JWT.AccessTTL = 15 * time.Minute
+	cfg.JWT.RefreshTTL = 30 * 24 * time.Hour
+	cfg.JWT.Issuer = "syncvault"
 
 	return cfg
 }
@@ -240,5 +287,31 @@ func LoadFromFile(filename string) (*Config, error) {
 		cfg.Kafka.BatchTimeout = 1 * time.Second
 	}
 
+	// Добавляем Redis адрес для удобства (если не установлен)
+	if cfg.Redis.Address == "" {
+		cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+	}
+
 	return &cfg, nil
+}
+
+// LoadConfig загружает конфигурацию из файла или переменных окружения
+func LoadConfig() *Config {
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "internal/config/config.yml"
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		log.Printf("Failed to load config from file %s: %v, using defaults", configPath, err)
+		return Default()
+	}
+
+	// Добавляем Redis адрес для удобства (если не установлен)
+	if cfg.Redis.Address == "" {
+		cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
+	}
+
+	return cfg
 }
