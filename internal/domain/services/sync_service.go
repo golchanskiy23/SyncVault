@@ -98,8 +98,9 @@ func (s *SyncDomainService) analyzeFileConflict(
 		if sourceFile.Status() == entities.FileStatusModified &&
 			targetFile.Status() == entities.FileStatusModified {
 
+			// Bug 1.2 fix: was passing valueobjects.FileID{} (empty), now passes real FileID
 			return entities.NewConflict(
-				valueobjects.FileID{},
+				sourceFile.FileID,
 				sourceNode,
 				targetNode,
 				entities.ConflictTypeContent,
@@ -111,7 +112,9 @@ func (s *SyncDomainService) analyzeFileConflict(
 			)
 		}
 	}
-	fileID, _ := valueobjects.FileIDFromString(fmt.Sprintf("%d", sourceFile.ID))
+
+	// Bug 1.3 fix: use FileIDFromInt64 instead of FileIDFromString(fmt.Sprintf("%d", ...))
+	fileID := valueobjects.FileIDFromInt64(sourceFile.ID)
 
 	if sourceFile.Status() == entities.FileStatusDeleted &&
 		targetFile.Status() == entities.FileStatusModified {
@@ -128,8 +131,9 @@ func (s *SyncDomainService) analyzeFileConflict(
 
 	if targetFile.Status() == entities.FileStatusDeleted &&
 		sourceFile.Status() == entities.FileStatusModified {
+		// Bug 1.2 fix: was passing valueobjects.FileID{} (empty), now passes real FileID
 		return entities.NewConflict(
-			valueobjects.FileID{},
+			fileID,
 			sourceNode,
 			targetNode,
 			entities.ConflictTypeDeletion,

@@ -91,6 +91,15 @@ func (p *KafkaProducer) publishWithRetry(ctx context.Context, topic string, even
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
+	// Bug 1.1 fix: safe type assertion with fallback instead of direct assertion
+	var eventID string
+	switch e := event.(type) {
+	case interface{ GetID() string }:
+		eventID = e.GetID()
+	default:
+		eventID = fmt.Sprintf("unknown-%d", time.Now().UnixNano())
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= p.config.MaxRetries; attempt++ {
 		if attempt > 0 {
@@ -103,15 +112,16 @@ func (p *KafkaProducer) publishWithRetry(ctx context.Context, topic string, even
 
 		msg := kafka.Message{
 			Topic: topic,
-			Key:   []byte(event.(interface{ GetID() string }).GetID()),
+			Key:   []byte(eventID),
 			Value: data,
 			Time:  time.Now(),
 		}
 
+		// Bug 1.1 fix: call cancel() explicitly after WriteMessages, not via defer inside loop
 		timeoutCtx, cancel := context.WithTimeout(ctx, p.config.Timeout)
-		defer cancel()
-
 		err = p.writer.WriteMessages(timeoutCtx, msg)
+		cancel()
+
 		if err == nil {
 			return nil
 		}
@@ -151,15 +161,16 @@ const (
 )
 
 type SyncEvent struct {
-	ID         string        `json:"id"`
-	Type       SyncEventType `json:"type"`
-	UserID     string        `json:"userId"`
-	SourceNode string        `json:"sourceNode"`
-	TargetNode string        `json:"targetNode"`
-	FilePaths  []string      `json:"filePaths"`
-	Timestamp  time.Time     `json:"timestamp"`
-	Status     string        `json:"status"`
-	Error      string        `json:"error,omitempty"`
+	ID            string        `json:"id"`
+	Type          SyncEventType `json:"type"`
+	UserID        string        `json:"userId"`
+	SourceNode    string        `json:"sourceNode"`
+	TargetNode    string        `json:"targetNode"`
+	FilePaths     []string      `json:"filePaths"`
+	Timestamp     time.Time     `json:"timestamp"`
+	Status        string        `json:"status"`
+	OperationType string        `json:"operationType,omitempty"`
+	Error         string        `json:"error,omitempty"`
 }
 
 func (e *SyncEvent) GetID() string {

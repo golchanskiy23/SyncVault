@@ -21,7 +21,9 @@ const (
 )
 
 type SyncEvent struct {
-	id          valueobjects.FileID
+	// Bug 1.8 fix: id was typed as valueobjects.FileID which is semantically wrong.
+	// SyncEvent is not a file — it has its own dedicated SyncEventID type.
+	id          valueobjects.SyncEventID
 	eventType   EventType
 	nodeID      valueobjects.StorageNodeID
 	filePath    valueobjects.FilePath
@@ -38,7 +40,7 @@ func NewSyncEvent(
 	description string,
 ) *SyncEvent {
 	return &SyncEvent{
-		id:          valueobjects.NewFileID(),
+		id:          valueobjects.NewSyncEventID(),
 		eventType:   eventType,
 		nodeID:      nodeID,
 		filePath:    filePath,
@@ -48,7 +50,7 @@ func NewSyncEvent(
 	}
 }
 
-func (e *SyncEvent) ID() valueobjects.FileID {
+func (e *SyncEvent) ID() valueobjects.SyncEventID {
 	return e.id
 }
 
