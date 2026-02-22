@@ -17,6 +17,7 @@ type AuthInterceptor struct {
 	publicMethods map[string]bool
 }
 
+
 // JWTValidator интерфейс для валидации JWT токенов
 type JWTValidator interface {
 	ValidateToken(token string) (*Claims, error)
