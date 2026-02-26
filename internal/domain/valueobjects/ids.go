@@ -32,6 +32,10 @@ func FileIDFromString(s string) (FileID, error) {
 	return FileID{value: s}, nil
 }
 
+func FileIDFromInt64(id int64) FileID {
+	return FileID{value: strconv.FormatInt(id, 10)}
+}
+
 func (f FileID) String() string {
 	return f.value
 }
@@ -140,6 +144,26 @@ func (c ConflictID) IsEmpty() bool {
 
 func (c ConflictID) Equals(other ConflictID) bool {
 	return c.value == other.value
+}
+
+type SyncEventID struct {
+	value string
+}
+
+func NewSyncEventID() SyncEventID {
+	return SyncEventID{value: generateID()}
+}
+
+func SyncEventIDFromString(s string) SyncEventID {
+	return SyncEventID{value: s}
+}
+
+func (s SyncEventID) String() string {
+	return s.value
+}
+
+func (s SyncEventID) IsEmpty() bool {
+	return s.value == ""
 }
 
 func (f *FileID) MarshalJSON() ([]byte, error) {

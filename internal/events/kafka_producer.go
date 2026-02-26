@@ -101,15 +101,21 @@ func (p *KafkaProducer) publishWithRetry(ctx context.Context, topic string, even
 			}
 		}
 
+		var key string
+		if getter, ok := event.(interface{ GetID() string }); ok {
+			key = getter.GetID()
+		}
+
 		msg := kafka.Message{
 			Topic: topic,
-			Key:   []byte(event.(interface{ GetID() string }).GetID()),
+			Key:   []byte(key),
 			Value: data,
 			Time:  time.Now(),
 		}
 
 		timeoutCtx, cancel := context.WithTimeout(ctx, p.config.Timeout)
-		defer cancel()
+		err = p.writer.WriteMessages(timeoutCtx, msg)
+		cancel()
 
 		err = p.writer.WriteMessages(timeoutCtx, msg)
 		if err == nil {
