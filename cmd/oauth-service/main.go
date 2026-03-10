@@ -18,6 +18,8 @@ import (
 	"syncvault/internal/auth"
 	"syncvault/internal/config"
 	"syncvault/internal/oauth/google"
+	syncadapters "syncvault/internal/sync/adapters"
+	internalsync "syncvault/internal/sync"
 )
 
 func main() {
@@ -79,6 +81,18 @@ func main() {
 
 	oauthHandlers := google.NewOAuthHandlers(db, googleDriveCfg, jwtService)
 
+	// Sync engine
+	store := internalsync.NewInMemoryStateStore()
+	engine := internalsync.NewSyncEngine(store, internalsync.KeepNewest)
+	registry := internalsync.NewNodeRegistry()
+	syncHandlers := internalsync.NewSyncHTTPHandlers(registry, engine)
+
+	// DriveAdapter для sync-узлов
+	syncHandlers.SetDriveFactory(&driveNodeFactory{
+		drive:  oauthHandlers.DriveAdapter(),
+		tmpDir: os.TempDir(),
+	})
+
 	router := chi.NewRouter()
 
 	router.Use(func(next http.Handler) http.Handler {
@@ -100,6 +114,16 @@ func main() {
 	})
 
 	oauthHandlers.RegisterRoutes(router)
+
+	// Sync API
+	router.Post("/sync/nodes/local", syncHandlers.RegisterLocalNode)
+	router.Post("/sync/nodes/remote", syncHandlers.RegisterRemoteNode)
+	router.Post("/sync/nodes/drive", syncHandlers.RegisterDriveNode)
+	router.Post("/sync/nodes/heartbeat", syncHandlers.Heartbeat)
+	router.Get("/sync/nodes", syncHandlers.ListNodes)
+	router.Post("/sync/run", syncHandlers.SyncPair)
+	router.Post("/sync/run/all", syncHandlers.SyncAll)
+	router.Delete("/sync/nodes/{id}", syncHandlers.UnregisterNode)
 
 	port := "8081"
 	if envPort := os.Getenv("OAUTH_SERVICE_PORT"); envPort != "" {
@@ -137,4 +161,15 @@ func main() {
 	}
 
 	log.Println("✅ OAuth Service stopped gracefully")
+}
+
+// driveNodeFactory реализует internalsync.DriveNodeFactory
+type driveNodeFactory struct {
+	drive  *google.DriveAdapter
+	tmpDir string
+}
+
+func (f *driveNodeFactory) NewDriveNode(userID, accountID, nodeID string) (internalsync.Node, error) {
+	api := syncadapters.NewGoogleDriveAdapter(f.drive, userID, accountID)
+	return internalsync.NewComplexStorage(nodeID, "google_drive", f.tmpDir, api), nil
 }
