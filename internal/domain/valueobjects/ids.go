@@ -32,10 +32,8 @@ func FileIDFromString(s string) (FileID, error) {
 	return FileID{value: s}, nil
 }
 
-// FileIDFromInt64 creates a FileID from a PostgreSQL SERIAL/BIGINT id.
-// Bug 1.3 fix: FileIDFromString rejects numeric IDs like "123" (not 32-char hex).
 func FileIDFromInt64(id int64) FileID {
-	return FileID{value: fmt.Sprintf("%d", id)}
+	return FileID{value: strconv.FormatInt(id, 10)}
 }
 
 func (f FileID) String() string {
@@ -148,8 +146,6 @@ func (c ConflictID) Equals(other ConflictID) bool {
 	return c.value == other.value
 }
 
-// SyncEventID is a dedicated ID type for SyncEvent domain entities.
-// Bug 1.8 fix: SyncEvent.id was incorrectly typed as FileID.
 type SyncEventID struct {
 	value string
 }

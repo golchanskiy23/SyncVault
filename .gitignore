@@ -4,3 +4,6 @@
 
 # VS Code settings
 .vscode/
+
+# Secrets — use config.example.yml as template
+internal/config/config.yml

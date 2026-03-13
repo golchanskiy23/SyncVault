@@ -7,6 +7,9 @@ import (
 	"sync/atomic"
 )
 
+// ErrPoolStopped возвращается при попытке отправить задачу в остановленный пул
+var ErrPoolStopped = errors.New("worker pool is stopped")
+
 type Task interface {
 	Execute(ctx context.Context) error
 }
@@ -23,9 +26,6 @@ func NewFuncTask(fn func(ctx context.Context) error) *FuncTask {
 	return &FuncTask{fn: fn}
 }
 
-// ErrPoolStopped is returned by Submit when the pool has been stopped.
-var ErrPoolStopped = errors.New("worker pool is stopped")
-
 type WorkerPool struct {
 	workers    int
 	taskQueue  chan Task
@@ -36,8 +36,8 @@ type WorkerPool struct {
 	errorCount int64
 	activeJobs int32
 	mu         sync.RWMutex
-	stopped    int32       // atomic flag — kept for backward compat with Stats
-	stopOnce   sync.Once   // Bug 1.6 fix: prevent double-close of taskQueue
+	stopped    int32
+	stopOnce   sync.Once // гарантирует однократное закрытие канала
 }
 
 func NewWorkerPool(ctx context.Context, workers, queueSize int) *WorkerPool {
@@ -103,14 +103,12 @@ func (p *WorkerPool) SubmitFunc(fn func(ctx context.Context) error) error {
 }
 
 // Stop останавливает пул воркеров
-// Bug 1.6 fix: use sync.Once + wg.Wait() BEFORE close(taskQueue) to prevent
-// "send on closed channel" panic from concurrent Submit/Stop calls.
 func (p *WorkerPool) Stop() {
 	p.stopOnce.Do(func() {
-		atomic.StoreInt32(&p.stopped, 1) // signal Submit to reject new tasks
-		p.cancel()                        // unblock workers waiting on ctx.Done()
-		p.wg.Wait()                       // wait for all workers to exit
-		close(p.taskQueue)                // safe to close only after workers are done
+		atomic.StoreInt32(&p.stopped, 1)
+		p.cancel()
+		p.wg.Wait()
+		close(p.taskQueue)
 	})
 }
 
@@ -131,3 +129,4 @@ type PoolStats struct {
 	ErrorCount int64 `json:"error_count"`
 	ActiveJobs int32 `json:"active_jobs"`
 }
+

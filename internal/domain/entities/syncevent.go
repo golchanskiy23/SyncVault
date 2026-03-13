@@ -21,8 +21,6 @@ const (
 )
 
 type SyncEvent struct {
-	// Bug 1.8 fix: id was typed as valueobjects.FileID which is semantically wrong.
-	// SyncEvent is not a file — it has its own dedicated SyncEventID type.
 	id          valueobjects.SyncEventID
 	eventType   EventType
 	nodeID      valueobjects.StorageNodeID
