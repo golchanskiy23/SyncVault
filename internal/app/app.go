@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
+
+	"syncvault/internal/config"
 )
 
 type App struct {
@@ -15,49 +18,61 @@ type App struct {
 	cancel     context.CancelFunc
 	shutdown   bool
 	mu         sync.RWMutex
+	config     *config.Config
 }
 
-func New() *App {
+func New(opts ...Option) (*App, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &App{
+	app := &App{
 		ctx:    ctx,
 		cancel: cancel,
+		config: config.Default(),
 	}
+
+	for _, opt := range opts {
+		if err := opt(app); err != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to apply option: %w", err)
+		}
+	}
+
+	return app, nil
 }
 
-// Добавить файл конфигурации из которого получать данные для сервера и т.п.
-// Добавить паттерн функциональных опций
 func (a *App) Run(ctx context.Context) error {
 	log.Println("Starting application...")
 
-	a.httpServer = &http.Server{
-		Addr:         ":8080",
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	if a.httpServer == nil {
+		a.httpServer = &http.Server{
+			Addr:         a.config.Address(),
+			ReadTimeout:  a.config.HTTP.ReadTimeout,
+			WriteTimeout: a.config.HTTP.WriteTimeout,
+			IdleTimeout:  a.config.HTTP.IdleTimeout,
+		}
 	}
 
 	a.wg.Add(1)
-	// Правильно ли запускать гоутину в горутине и какие поблемы это может вызывать?
 	go func() {
 		defer a.wg.Done()
 		log.Printf("HTTP server starting on %s", a.httpServer.Addr)
 
-		go func() {
-			<-a.ctx.Done()
-			log.Println("Application context cancelled, shutting down HTTP server...")
-
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
-				log.Printf("HTTP server shutdown error: %v", err)
-			}
-		}()
-
 		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		<-a.ctx.Done()
+		log.Println("Application context cancelled, shutting down HTTP server...")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
 		}
 	}()
 
@@ -85,7 +100,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.cancel()
 
 	if a.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(ctx, a.config.Shutdown.Timeout)
 		defer cancel()
 
 		log.Println("Shutting down HTTP server...")
