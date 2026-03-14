@@ -2,7 +2,10 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"time"
+
+	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
@@ -40,4 +43,18 @@ func (c *Config) Address() string {
 	}
 
 	return fmt.Sprintf("%s:%d", c.HTTP.Host, c.HTTP.Port)
+}
+
+func LoadFromFile(filename string) (*Config, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config file %s: %w", filename, err)
+	}
+
+	return &cfg, nil
 }

@@ -10,10 +10,18 @@ import (
 	"time"
 
 	"syncvault/internal/app"
+	"syncvault/internal/config"
 )
 
 func main() {
-	application, err := app.New()
+	// Загружаем конфигурацию из YAML файла
+	cfg, err := config.LoadFromFile("internal/config/config.yml")
+	if err != nil {
+		log.Printf("Failed to load config.yml, using defaults: %v", err)
+		cfg = config.Default()
+	}
+
+	application, err := app.New(app.WithConfig(cfg))
 	if err != nil {
 		log.Fatalf("Failed to create application: %v", err)
 	}
