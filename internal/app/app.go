@@ -113,7 +113,15 @@ func (a *App) setupDependencies() {
 	}
 
 	// Initialize GridFS storage adapter first
-	a.gridfsStorage = storage.NewGridFSAdapter(a.mongoDB, "syncvault_files")
+	// Bug 1.11 fix: NewGridFSAdapter now returns (adapter, error) instead of calling log.Fatalf
+	gridfsAdapter, err := storage.NewGridFSAdapter(a.mongoDB, "syncvault_files")
+	if err != nil {
+		log.Printf("⚠️ Failed to initialize GridFS adapter: %v", err)
+		// Continue without GridFS — file upload/download will fail gracefully
+		a.gridfsStorage = nil
+	} else {
+		a.gridfsStorage = gridfsAdapter
+	}
 
 	// Create service (Domain layer) with GridFS storage
 	a.fileService = services.NewFileService(a.fileRepo, a.gridfsStorage)
@@ -214,16 +222,18 @@ func (a *App) handleFileUpdated(ctx context.Context, event *events.FileEvent) er
 func (a *App) handleFileDeleted(ctx context.Context, event *events.FileEvent) error {
 	log.Printf("File deleted: %s (user: %s)", event.FilePath, event.UserID)
 
-	// Publish sync event
+	// Bug 1.7 fix: was publishing Status="started" same as created/updated.
+	// Now uses distinct Status and OperationType to identify delete operations.
 	syncEvent := &events.SyncEvent{
-		ID:         fmt.Sprintf("sync_%d", time.Now().UnixNano()),
-		Type:       events.SyncStarted,
-		UserID:     event.UserID,
-		SourceNode: "file-service",
-		TargetNode: "sync-service",
-		FilePaths:  []string{event.FilePath},
-		Timestamp:  time.Now(),
-		Status:     "started",
+		ID:            fmt.Sprintf("sync_%d", time.Now().UnixNano()),
+		Type:          events.SyncStarted,
+		UserID:        event.UserID,
+		SourceNode:    "file-service",
+		TargetNode:    "sync-service",
+		FilePaths:     []string{event.FilePath},
+		Timestamp:     time.Now(),
+		Status:        "delete_initiated",
+		OperationType: "delete",
 	}
 
 	return a.kafkaProducer.PublishSyncEvent(ctx, syncEvent)
@@ -282,9 +292,9 @@ func (a *App) connectMongoDB() error {
 	a.mongoDB = db
 	log.Printf("✓ Connected to MongoDB at %s/%s", a.config.MongoDB.URI, a.config.MongoDB.Database)
 
-	// Initialize audit repository
-	a.auditRepo = mongoinfra.NewSyncAuditRepository(db)
-	a.auditService = services.NewAuditService(a.auditRepo)
+	// Bug 1.10 fix: auditRepo and auditService were initialized here AND in setupDependencies.
+	// connectMongoDB runs after setupDependencies, silently overwriting the first init.
+	// Initialization is now done exclusively in setupDependencies.
 
 	return nil
 }

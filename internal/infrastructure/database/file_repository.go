@@ -89,9 +89,13 @@ func (r *FileRepository) GetByID(ctx context.Context, id int64) (*entities.File,
 	`
 
 	file := &entities.File{}
+	// Bug 1.4 fix: SELECT order is id, user_id, file_name, file_path, file_size_bytes, ...
+	// Previous Scan skipped file_name, causing file_path to land in FileSize and shifting all columns.
+	var fileName string // file_name has no corresponding field in entities.File
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&file.ID,
 		&file.UserID,
+		&fileName,
 		&file.FilePath,
 		&file.FileSize,
 		&file.FileHash,
@@ -130,9 +134,11 @@ func (r *FileRepository) GetByUserID(ctx context.Context, userID int64, limit, o
 	var files []entities.File
 	for rows.Next() {
 		file := entities.File{}
+		var fileName string // absorb file_name column (no corresponding field in entities.File)
 		err := rows.Scan(
 			&file.ID,
 			&file.UserID,
+			&fileName,
 			&file.FilePath,
 			&file.FileSize,
 			&file.FileHash,
@@ -154,35 +160,6 @@ func (r *FileRepository) GetByUserID(ctx context.Context, userID int64, limit, o
 
 	log.Printf("FileRepository: Retrieved %d files for user %d", len(files), userID)
 	return files, nil
-}
-
-// Update updates an existing file
-func (r *FileRepository) Update_old(ctx context.Context, file *entities.File) error {
-	log.Printf("FileRepository: Updating file %+v", file)
-
-	query := `
-		UPDATE files 
-		SET file_name = $2, file_path = $3, file_size_bytes = $4, file_hash = $5,
-		    storage_node_id = $6, file_status = $7, updated_at = NOW()
-		WHERE id = $1
-	`
-
-	_, err := r.db.Exec(ctx, query,
-		file.ID,
-		"updated_file.txt", // Temporary file name
-		file.FilePath.String(),
-		file.FileSize,
-		file.FileHash.String(),
-		file.StorageNodeID.String(),
-		file.FileStatus,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to update file: %w", err)
-	}
-
-	log.Printf("FileRepository: File %d updated successfully", file.ID)
-	return nil
 }
 
 // Save updates a file in the database
@@ -226,9 +203,11 @@ func (r *FileRepository) FindByPath(ctx context.Context, nodeID valueobjects.Sto
 	`
 
 	file := &entities.File{}
+	var fileName string // absorb file_name column
 	err := r.db.QueryRow(ctx, query, nodeID, path).Scan(
 		&file.ID,
 		&file.UserID,
+		&fileName,
 		&file.FilePath,
 		&file.FileSize,
 		&file.FileHash,
@@ -266,9 +245,11 @@ func (r *FileRepository) FindByNode(ctx context.Context, nodeID valueobjects.Sto
 	var files []*entities.File
 	for rows.Next() {
 		file := &entities.File{}
+		var fileName string // absorb file_name column
 		err := rows.Scan(
 			&file.ID,
 			&file.UserID,
+			&fileName,
 			&file.FilePath,
 			&file.FileSize,
 			&file.FileHash,
@@ -308,9 +289,11 @@ func (r *FileRepository) FindModifiedSince(ctx context.Context, nodeID valueobje
 	var files []*entities.File
 	for rows.Next() {
 		file := &entities.File{}
+		var fileName string // absorb file_name column
 		err := rows.Scan(
 			&file.ID,
 			&file.UserID,
+			&fileName,
 			&file.FilePath,
 			&file.FileSize,
 			&file.FileHash,
@@ -415,9 +398,11 @@ func (r *FileRepository) List(ctx context.Context, filter ports.FileFilter) ([]e
 	var files []entities.File
 	for rows.Next() {
 		file := entities.File{}
+		var fileName string // absorb file_name column
 		err := rows.Scan(
 			&file.ID,
 			&file.UserID,
+			&fileName,
 			&file.FilePath,
 			&file.FileSize,
 			&file.FileHash,

@@ -22,7 +22,10 @@ type GridFSAdapter struct {
 	chunkSize int32
 }
 
-func NewGridFSAdapter(db *mongo.Database, bucketName string) *GridFSAdapter {
+// NewGridFSAdapter creates a GridFS storage adapter.
+// Bug 1.11 fix: was calling log.Fatalf on error (process exit), now returns (nil, error)
+// so the caller can handle the failure gracefully.
+func NewGridFSAdapter(db *mongo.Database, bucketName string) (*GridFSAdapter, error) {
 	chunkSize := int32(255 * 1024)
 	opts := options.GridFSBucket().
 		SetName(bucketName).
@@ -30,14 +33,14 @@ func NewGridFSAdapter(db *mongo.Database, bucketName string) *GridFSAdapter {
 
 	bucket, err := gridfs.NewBucket(db, opts)
 	if err != nil {
-		log.Fatalf("Failed to create GridFS bucket: %v", err)
+		return nil, fmt.Errorf("failed to create GridFS bucket: %w", err)
 	}
 
 	return &GridFSAdapter{
 		bucket:    bucket,
 		database:  db,
 		chunkSize: chunkSize,
-	}
+	}, nil
 }
 
 func (g *GridFSAdapter) PutFile(ctx context.Context, filePath valueobjects.FilePath, content io.Reader, size int64) error {

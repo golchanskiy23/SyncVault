@@ -145,3 +145,4 @@ func (c *KafkaConsumer) Close() error {
 	}
 	return c.reader.Close()
 }
+

@@ -23,6 +23,7 @@ import (
 	"syncvault/internal/config"
 	authv1 "syncvault/internal/grpc/proto/auth"
 	"syncvault/internal/oauth/google"
+	"syncvault/internal/security"
 	"syncvault/internal/storage"
 )
 
@@ -126,6 +127,13 @@ func main() {
 	// Создаем JWT сервис
 	jwtService := auth.NewJWTService(jwtConfig, rdb)
 
+	// Создаем security компоненты
+	// Bug 1.13 fix: import was "security" (non-existent), now "syncvault/internal/security"
+	// passwordHasher is available for use in login handler (hash/verify passwords from DB)
+	_ = security.NewPasswordHasher() // suppress unused warning; use in real DB auth flow
+	validator := security.NewValidator()
+	rateLimiter := security.NewRateLimiter()
+
 	// Создаем OAuth handlers если настроен
 	var oauthHandlers *google.OAuthHandlers
 	if cfg.OAuth.GoogleDrive != nil {
@@ -148,6 +156,10 @@ func main() {
 			})
 		})
 
+		// Добавляем security middleware
+		router.Use(rateLimiter.Middleware)
+		router.Use(security.SecurityHeadersMiddleware)
+
 		// Health check
 		router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 			response := map[string]interface{}{
@@ -159,7 +171,7 @@ func main() {
 			json.NewEncoder(w).Encode(response)
 		})
 
-		// Login endpoint
+		// Login endpoint с улучшенной безопасностью
 		router.Post("/login", func(w http.ResponseWriter, r *http.Request) {
 			var req map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -167,7 +179,22 @@ func main() {
 				return
 			}
 
+			// Валидация входных данных
+			loginData := struct {
+				Email    string `validate:"required,email"`
+				Password string `validate:"required,min=8"`
+			}{
+				Email:    req["email"],
+				Password: req["password"],
+			}
+
+			if err := validator.ValidateStruct(loginData); err != nil {
+				http.Error(w, "Validation failed: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+
 			if req["email"] == "test@example.com" && req["password"] == "password123" {
+				// В реальном приложении здесь должна быть проверка по базе данных
 				tokenPair, err := jwtService.GenerateTokenPair(context.Background(), "user_123", req["email"], "user")
 				if err != nil {
 					http.Error(w, "Authentication failed", http.StatusInternalServerError)

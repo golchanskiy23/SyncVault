@@ -129,3 +129,4 @@ type PoolStats struct {
 	ErrorCount int64 `json:"error_count"`
 	ActiveJobs int32 `json:"active_jobs"`
 }
+

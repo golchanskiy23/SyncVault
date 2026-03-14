@@ -43,7 +43,8 @@ func NewSyncService(cfg *config.Config) *SyncService {
 	producer := events.NewKafkaProducer(kafkaConfig)
 
 	return &SyncService{
-		deviceManager:  storage.NewDeviceManager(nil), // Здесь будет конфиг
+		// Bug 1.14 fix: was passing nil config → panic on any DeviceManager method that reads cfg
+		deviceManager:  storage.NewDeviceManager(cfg),
 		kafkaConfig:    kafkaConfig,
 		producer:       producer,
 		shutdownCtx:    shutdownCtx,
