@@ -14,11 +14,9 @@ import (
 )
 
 func main() {
-	// Загружаем конфигурацию из YAML файла
 	cfg, err := config.LoadFromFile("internal/config/config.yml")
 	if err != nil {
-		log.Printf("Failed to load config.yml, using defaults: %v", err)
-		cfg = config.Default()
+		log.Fatalf("Failed to load config.yml: %v", err)
 	}
 
 	application, err := app.New(app.WithConfig(cfg))
