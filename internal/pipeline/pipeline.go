@@ -152,7 +152,12 @@ func (p *ParallelPipeline[I, O]) ExecuteBatch(ctx context.Context, inputs []I) (
 
 	var results []O
 	for res := range resultChan {
-		results = append(results, res.Value)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			results = append(results, res.Value)
+		}
 	}
 
 	return results, nil

@@ -31,6 +31,8 @@ type WorkerPool struct {
 	taskCount  int64
 	errorCount int64
 	activeJobs int32
+	mu         sync.RWMutex // Защита от race conditions
+	stopped    int32        // Атомарный флаг остановки
 }
 
 func NewWorkerPool(ctx context.Context, workers, queueSize int) *WorkerPool {
@@ -77,7 +79,12 @@ func (p *WorkerPool) worker(id int) {
 	}
 }
 
+// Submit добавляет задачу в очередь
 func (p *WorkerPool) Submit(task Task) error {
+	if atomic.LoadInt32(&p.stopped) != 0 {
+		return context.Canceled
+	}
+
 	select {
 	case <-p.ctx.Done():
 		return p.ctx.Err()
@@ -90,7 +97,12 @@ func (p *WorkerPool) SubmitFunc(fn func(ctx context.Context) error) error {
 	return p.Submit(NewFuncTask(fn))
 }
 
+// Stop останавливает пул воркеров
 func (p *WorkerPool) Stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	atomic.StoreInt32(&p.stopped, 1) // Устанавливаем флаг остановки
 	p.cancel()
 	close(p.taskQueue)
 	p.wg.Wait()
