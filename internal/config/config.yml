@@ -1,0 +1,9 @@
+http:
+  host: ""
+  port: 8080
+  readTimeout: 15s
+  writeTimeout: 15s
+  idleTimeout: 60s
+
+shutdown:
+  timeout: 30s
