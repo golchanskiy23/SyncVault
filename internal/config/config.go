@@ -32,6 +32,20 @@ func (c *Config) Address() string {
 	return fmt.Sprintf("%s:%d", c.HTTP.Host, c.HTTP.Port)
 }
 
+// Default возвращает конфигурацию по умолчанию
+func Default() *Config {
+	cfg := &Config{}
+
+	cfg.HTTP.Host = ""
+	cfg.HTTP.Port = 8080
+	cfg.HTTP.ReadTimeout = 15 * time.Second
+	cfg.HTTP.WriteTimeout = 15 * time.Second
+	cfg.HTTP.IdleTimeout = 60 * time.Second
+	cfg.Shutdown.Timeout = 30 * time.Second
+
+	return cfg
+}
+
 func LoadFromFile(filename string) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
