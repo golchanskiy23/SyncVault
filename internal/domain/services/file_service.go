@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"strings"
 
 	"syncvault/internal/domain/entities"
 	"syncvault/internal/domain/ports"
@@ -53,6 +55,21 @@ type ListFilesResponse struct {
 	Total int             `json:"total"`
 }
 
+// UploadFileRequest represents a request to upload file content
+type UploadFileRequest struct {
+	Path   string `json:"path"`
+	UserID int64  `json:"user_id"`
+	NodeID string `json:"node_id"`
+}
+
+// UploadFileResponse represents a response after uploading file
+type UploadFileResponse struct {
+	ID     int64  `json:"id"`
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	Status string `json:"status"`
+}
+
 // CreateFile creates a new file with business logic validation
 func (s *FileService) CreateFile(ctx context.Context, req CreateFileRequest) (*CreateFileResponse, error) {
 	log.Printf("FileService: Creating file with path: %s, size: %d", req.Path, req.Size)
@@ -94,12 +111,6 @@ func (s *FileService) CreateFile(ctx context.Context, req CreateFileRequest) (*C
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
 
-	// Store in storage (if needed)
-	if s.storage != nil {
-		// TODO: Implement actual file storage
-		log.Printf("FileService: File %d stored in storage", fileID)
-	}
-
 	log.Printf("FileService: File created successfully with ID: %d", fileID)
 
 	return &CreateFileResponse{
@@ -108,6 +119,106 @@ func (s *FileService) CreateFile(ctx context.Context, req CreateFileRequest) (*C
 		Size:   req.Size,
 		Status: "created",
 	}, nil
+}
+
+// UploadFile uploads file content to GridFS storage
+func (s *FileService) UploadFile(ctx context.Context, req UploadFileRequest, content io.Reader) (*UploadFileResponse, error) {
+	log.Printf("FileService: Uploading file content for path: %s, user: %d", req.Path, req.UserID)
+
+	// Business validation
+	if req.Path == "" {
+		return nil, fmt.Errorf("file path cannot be empty")
+	}
+	if req.UserID <= 0 {
+		return nil, fmt.Errorf("user ID must be positive")
+	}
+
+	// Create file path
+	filePath, err := valueobjects.NewFilePath(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid file path: %w", err)
+	}
+
+	// Read content to get size
+	contentBytes, err := io.ReadAll(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file content: %w", err)
+	}
+	size := int64(len(contentBytes))
+	contentReader := strings.NewReader(string(contentBytes))
+
+	// Store in GridFS
+	if s.storage != nil {
+		if err := s.storage.PutFile(ctx, filePath, contentReader, size); err != nil {
+			return nil, fmt.Errorf("failed to store file in GridFS: %w", err)
+		}
+		log.Printf("FileService: File stored in GridFS: %s", req.Path)
+	}
+
+	// Create file object for database
+	fileHash := valueobjects.NewFileHash(contentBytes)
+	storageNodeID, err := valueobjects.StorageNodeIDFromString(req.NodeID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid storage node ID: %w", err)
+	}
+
+	fileObj := &entities.File{
+		FilePath:      filePath,
+		FileHash:      fileHash,
+		FileSize:      size,
+		FileStatus:    entities.FileStatusUploaded,
+		StorageNodeID: storageNodeID,
+		UserID:        req.UserID,
+	}
+
+	// Store in repository
+	fileID, err := s.fileRepo.Create(ctx, fileObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file record: %w", err)
+	}
+
+	log.Printf("FileService: File uploaded successfully with ID: %d", fileID)
+
+	return &UploadFileResponse{
+		ID:     fileID,
+		Path:   req.Path,
+		Size:   size,
+		Status: "uploaded",
+	}, nil
+}
+
+// DownloadFile downloads file content from GridFS storage
+func (s *FileService) DownloadFile(ctx context.Context, userID, fileID int64) (io.ReadCloser, int64, error) {
+	log.Printf("FileService: Downloading file %d for user %d", fileID, userID)
+
+	// Convert int64 to valueobjects.FileID
+	voFileID, err := valueobjects.FileIDFromString(fmt.Sprintf("%d", fileID))
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid file ID: %w", err)
+	}
+
+	// Get file from repository
+	file, err := s.fileRepo.FindByID(ctx, voFileID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get file: %w", err)
+	}
+
+	// Business rule: user can only access their own files
+	if file.UserID != userID {
+		return nil, 0, fmt.Errorf("access denied: file does not belong to user")
+	}
+
+	// Download from GridFS
+	if s.storage != nil {
+		reader, size, err := s.storage.GetFile(ctx, file.FilePath)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to download file from GridFS: %w", err)
+		}
+		log.Printf("FileService: File %d downloaded from GridFS", fileID)
+		return reader, size, nil
+	}
+
+	return nil, 0, fmt.Errorf("storage not available")
 }
 
 // ListFiles retrieves files with business logic
@@ -182,15 +293,18 @@ func (s *FileService) DeleteFile(ctx context.Context, userID, fileID int64) erro
 		return fmt.Errorf("access denied: file does not belong to user")
 	}
 
+	// Delete from GridFS
+	if s.storage != nil {
+		if err := s.storage.DeleteFile(ctx, file.FilePath); err != nil {
+			log.Printf("FileService: Warning - failed to delete file from GridFS: %v", err)
+		} else {
+			log.Printf("FileService: File %d deleted from GridFS", fileID)
+		}
+	}
+
 	err = s.fileRepo.Delete(ctx, voFileID)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
-	}
-
-	// Delete from storage (if needed)
-	if s.storage != nil {
-		// TODO: Implement actual storage deletion
-		log.Printf("FileService: File %d deleted from storage", fileID)
 	}
 
 	log.Printf("FileService: File %d deleted successfully", fileID)
