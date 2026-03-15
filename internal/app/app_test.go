@@ -11,11 +11,8 @@ import (
 	"syncvault/internal/config"
 )
 
-// ============================================================================
-// BASIC APP TESTS (without HTTP server)
-// ============================================================================
-
 func TestApp_New(t *testing.T) {
+
 	t.Parallel()
 
 	app, err := New()
