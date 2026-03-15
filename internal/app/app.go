@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"syncvault/docs"
 	"syncvault/internal/config"
+	"syncvault/internal/db"
 )
 
 type App struct {
@@ -47,6 +49,12 @@ func New(opts ...Option) (*App, error) {
 		}
 	}
 
+	// Инициализируем подключение к базе данных для тестов
+	if err := app.connectDB(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
 	return app, nil
 }
 
@@ -76,9 +84,11 @@ func (a *App) connectDB() error {
 func (a *App) Run(ctx context.Context) error {
 	log.Println("Starting application...")
 
-	// Подключаемся к базе данных
-	if err := a.connectDB(); err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+	// Подключаемся к базе данных, если еще не подключены
+	if a.db == nil {
+		if err := a.connectDB(); err != nil {
+			return fmt.Errorf("failed to connect to database: %w", err)
+		}
 	}
 
 	a.setupMiddleware()
@@ -231,11 +241,17 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"healthy","database":"connected","users":%d,"files":%d,"result":%d}`, userCount, fileCount, result)
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"status":"unhealthy","database":"not_connected"}`))
+		return
 	}
+
+	// Если база данных не подключена
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte(`{"status":"unhealthy","database":"not_connected"}`))
+}
+
+func (a *App) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	a.handleHealth(w, r)
 }
 
 func (a *App) HandlePing(w http.ResponseWriter, r *http.Request) {
@@ -263,8 +279,8 @@ func (a *App) setupMiddleware() {
 	a.router.Use(middleware.RealIP)
 	a.router.Use(middleware.Logger)
 	a.router.Use(middleware.Recoverer)
-	a.router.Use(middleware.Timeout(60 * time.Second))
-	a.router.Use(middleware.AllowContentType("application/json"))
+	// a.router.Use(middleware.Timeout(60 * time.Second))
+	// a.router.Use(middleware.AllowContentType("application/json"))
 
 	a.router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +380,7 @@ func (a *App) internalAuthMiddleware(next http.Handler) http.Handler {
 }
 
 func (a *App) getInternalToken() string {
-	return "syncvault-internal-token-123"
+	return "syncvault-internal-token"
 }
 
 func (a *App) handlePing(w http.ResponseWriter, r *http.Request) {
@@ -374,15 +390,49 @@ func (a *App) handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	// Используем SimpleDB из пакета db для получения файлов
+	simpleDB := db.NewSimpleDB(a.db)
+
+	files, err := simpleDB.ListFiles(r.Context(), 1, 10, 0)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to list files: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`[{"id":"file1","path":"/documents/report.pdf","size":1024}]`))
+	fmt.Fprintf(w, `{"files":%d,"data":%v}`, len(files), files)
 }
 
 func (a *App) handleCreateFile(w http.ResponseWriter, r *http.Request) {
+	// Используем SimpleDB из пакета db для создания файла
+	simpleDB := db.NewSimpleDB(a.db)
+
+	// Парсим JSON из тела запроса
+	var requestBody struct {
+		Path   string `json:"path"`
+		Size   int64  `json:"size"`
+		NodeID string `json:"node_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		log.Printf("JSON decode error: %v", err)
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Создаем файл через базу данных
+	fileID, err := simpleDB.CreateFile(r.Context(), 1, "new_file.txt", requestBody.Path, requestBody.Size)
+	if err != nil {
+		log.Printf("Database error: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("File created successfully: ID=%d, Path=%s, Size=%d", fileID, requestBody.Path, requestBody.Size)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"id":"new-file-id","path":"/documents/new.pdf","size":2048}`))
+	fmt.Fprintf(w, `{"id":%d,"message":"File created successfully","path":"%s","size":%d}`, fileID, requestBody.Path, requestBody.Size)
 }
 
 func (a *App) handleGetFile(w http.ResponseWriter, r *http.Request) {

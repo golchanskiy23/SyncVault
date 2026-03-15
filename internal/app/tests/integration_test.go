@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ func TestIntegration(t *testing.T) {
 func (suite *IntegrationTestSuite) TestFileHandler_CreateFile_Integration() {
 	// Arrange
 	requestBody := map[string]interface{}{
-		"path":    "/integration/test.txt",
+		"path":    fmt.Sprintf("/integration/test_%d.txt", time.Now().UnixNano()),
 		"size":    int64(1024),
 		"node_id": "integration-node",
 	}

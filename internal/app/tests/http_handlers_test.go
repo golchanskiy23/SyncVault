@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -52,7 +53,7 @@ func (suite *HTTPHandlersTestSuite) TestFileHandler_CreateFile_Success() {
 	handler := http.HandlerFunc(suite.app.HandleCreateFile)
 
 	requestBody := map[string]interface{}{
-		"path":    "/test/file.txt",
+		"path":    fmt.Sprintf("/test/file_%d.txt", time.Now().UnixNano()),
 		"size":    int64(1024),
 		"node_id": "test-node",
 	}
@@ -75,6 +76,10 @@ func (suite *HTTPHandlersTestSuite) TestFileHandler_CreateFile_Success() {
 
 	// Проверяем что ответ - это валидный JSON (не конкретные значения)
 	assert.NotEmpty(suite.T(), response)
+
+	// Выводим ответ для отладки
+	suite.T().Logf("Response body: %s", rr.Body.String())
+	suite.T().Logf("Response JSON: %+v", response)
 }
 
 func (suite *HTTPHandlersTestSuite) TestFileHandler_CreateFile_ValidationError() {
@@ -86,12 +91,12 @@ func (suite *HTTPHandlersTestSuite) TestFileHandler_CreateFile_ValidationError()
 		{
 			name:           "Empty body",
 			requestBody:    "",
-			expectedStatus: http.StatusCreated, // Заглушка всегда возвращает 201
+			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name:           "Invalid JSON",
 			requestBody:    `{"path": "/test.txt", "size": "invalid"}`,
-			expectedStatus: http.StatusCreated, // Заглушка всегда возвращает 201
+			expectedStatus: http.StatusBadRequest,
 		},
 	}
 
