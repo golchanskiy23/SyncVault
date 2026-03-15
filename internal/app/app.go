@@ -118,36 +118,91 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	log.Println("Starting application shutdown...")
 
+	// Отмена контекста для всех горутин
 	a.cancel()
 
+	// Graceful shutdown HTTP сервера
 	if a.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, a.config.Shutdown.Timeout)
+		shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		log.Println("Shutting down HTTP server...")
 		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
 			log.Printf("HTTP server shutdown error: %v", err)
 		}
 	}
 
-	//a.shutdownBackgroundServices(ctx)
-
-	done := make(chan struct{})
-	go func() {
-		a.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Println("All background services shutdown completed")
-	case <-ctx.Done():
-		log.Println("Shutdown timeout reached, forcing exit")
-		return ctx.Err()
-	}
-
+	a.wg.Wait()
 	log.Println("Application shutdown completed")
 	return nil
+}
+
+// Public exported methods for testing
+func (a *App) HandleCreateFile(w http.ResponseWriter, r *http.Request) {
+	a.handleCreateFile(w, r)
+}
+
+func (a *App) HandleGetFile(w http.ResponseWriter, r *http.Request) {
+	a.handleGetFile(w, r)
+}
+
+func (a *App) HandleUpdateFile(w http.ResponseWriter, r *http.Request) {
+	a.handleUpdateFile(w, r)
+}
+
+func (a *App) HandleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	a.handleDeleteFile(w, r)
+}
+
+func (a *App) HandleStartSync(w http.ResponseWriter, r *http.Request) {
+	a.handleStartSync(w, r)
+}
+
+func (a *App) HandleGetSyncStatus(w http.ResponseWriter, r *http.Request) {
+	a.handleGetSyncStatus(w, r)
+}
+
+func (a *App) HandleStopSync(w http.ResponseWriter, r *http.Request) {
+	a.handleStopSync(w, r)
+}
+
+func (a *App) HandleCreateStorage(w http.ResponseWriter, r *http.Request) {
+	a.handleCreateStorage(w, r)
+}
+
+func (a *App) HandleGetStorageUsage(w http.ResponseWriter, r *http.Request) {
+	a.handleGetStorageUsage(w, r)
+}
+
+func (a *App) HandleGetStorage(w http.ResponseWriter, r *http.Request) {
+	a.handleGetStorage(w, r)
+}
+
+func (a *App) InternalAuthMiddleware(next http.Handler) http.Handler {
+	return a.internalAuthMiddleware(next)
+}
+
+func (a *App) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	a.handleHealth(w, r)
+}
+
+func (a *App) HandlePing(w http.ResponseWriter, r *http.Request) {
+	a.handlePing(w, r)
+}
+
+// GetRouter - возвращает chi роутер для тестирования
+func (a *App) GetRouter() http.Handler {
+	return a.router
+}
+
+// GetHTTPServer - возвращает HTTP сервер для тестирования
+func (a *App) GetHTTPServer() *http.Server {
+	return a.httpServer
+}
+
+// SetupTestRoutes - настройка роутов для тестов
+func (a *App) SetupTestRoutes() {
+	a.setupMiddleware()
+	a.setupRoutes()
 }
 
 func (a *App) setupMiddleware() {
@@ -235,6 +290,11 @@ func (a *App) setupRoutes() {
 		r.Route("/health", func(r chi.Router) {
 			r.Get("/readiness", a.handleReadinessCheck)
 			r.Get("/liveness", a.handleLivenessCheck)
+		})
+
+		r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("success"))
 		})
 	})
 }
