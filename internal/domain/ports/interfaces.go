@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"syncvault/internal/domain/entities"
 	"syncvault/internal/domain/valueobjects"
 )
 
@@ -23,6 +24,23 @@ type Storage interface {
 	Connect(ctx context.Context) error
 	Disconnect(ctx context.Context) error
 	IsConnected(ctx context.Context) bool
+}
+
+type FileRepository interface {
+	Create(ctx context.Context, file *entities.File) (int64, error)
+	GetByID(ctx context.Context, id int64) (*entities.File, error)
+	GetByUserID(ctx context.Context, userID int64, limit, offset int) ([]entities.File, error)
+	Update(ctx context.Context, file *entities.File) error
+	Delete(ctx context.Context, id int64) error
+	List(ctx context.Context, filter FileFilter) ([]entities.File, error)
+}
+
+type FileFilter struct {
+	UserID   *int64
+	Status   *entities.FileStatus
+	PathLike *string
+	Limit    int
+	Offset   int
 }
 
 type FileInfo struct {

@@ -18,10 +18,10 @@ const (
 type ConflictResolution string
 
 const (
-	ConflictResolutionKeepSource    ConflictResolution = "keep_source"
-	ConflictResolutionKeepTarget    ConflictResolution = "keep_target"
-	ConflictResolutionKeepBoth      ConflictResolution = "keep_both"
-	ConflictResolutionManualMerge   ConflictResolution = "manual_merge"
+	ConflictResolutionKeepSource  ConflictResolution = "keep_source"
+	ConflictResolutionKeepTarget  ConflictResolution = "keep_target"
+	ConflictResolutionKeepBoth    ConflictResolution = "keep_both"
+	ConflictResolutionManualMerge ConflictResolution = "manual_merge"
 )
 
 type Conflict struct {
@@ -34,8 +34,9 @@ type Conflict struct {
 	resolution   *ConflictResolution
 	resolvedAt   *time.Time
 	createdAt    time.Time
-	sourceFile   *FileObject
-	targetFile   *FileObject
+	UpdatedAt    time.Time
+	sourceFile   *File
+	targetFile   *File
 }
 
 func NewConflict(
@@ -43,8 +44,9 @@ func NewConflict(
 	sourceNode, targetNode valueobjects.StorageNodeID,
 	conflictType ConflictType,
 	description string,
-	sourceFile, targetFile *FileObject,
+	sourceFile, targetFile *File,
 ) *Conflict {
+	now := time.Now()
 	return &Conflict{
 		id:           valueobjects.NewConflictID(),
 		fileID:       fileID,
@@ -52,7 +54,8 @@ func NewConflict(
 		targetNode:   targetNode,
 		conflictType: conflictType,
 		description:  description,
-		createdAt:    time.Now(),
+		createdAt:    now,
+		UpdatedAt:    now,
 		sourceFile:   sourceFile,
 		targetFile:   targetFile,
 	}
@@ -94,11 +97,11 @@ func (c *Conflict) CreatedAt() time.Time {
 	return c.createdAt
 }
 
-func (c *Conflict) SourceFile() *FileObject {
+func (c *Conflict) SourceFile() *File {
 	return c.sourceFile
 }
 
-func (c *Conflict) TargetFile() *FileObject {
+func (c *Conflict) TargetFile() *File {
 	return c.targetFile
 }
 
