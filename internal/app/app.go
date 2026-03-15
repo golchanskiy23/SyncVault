@@ -10,7 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger"
 
+	"syncvault/docs"
 	"syncvault/internal/config"
 )
 
@@ -90,10 +92,14 @@ func (a *App) Run(ctx context.Context) error {
 
 	log.Println("Application started successfully")
 	log.Printf("📚 API Documentation:")
-	log.Printf(" 🌐 Public API: http://localhost:8080/api/v1/")
-	log.Printf(" 🔧 Internal API: http://localhost:8080/internal/")
-	log.Printf(" ❤️ Health Check: http://localhost:8080/api/v1/health")
-	log.Printf(" 🏓 Ping: http://localhost:8080/api/v1/ping")
+	log.Printf("   🌐 Public API: http://localhost:8080/api/v1/")
+	log.Printf("   🔧 Internal API: http://localhost:8080/internal/")
+	log.Printf("   ❤️  Health Check: http://localhost:8080/api/v1/health")
+	log.Printf("   🏓 Ping: http://localhost:8080/api/v1/ping")
+	log.Printf("   📖 Swagger UI: http://localhost:8080/swagger/index.html")
+	log.Printf("   � Swagger UI: http://localhost:8080/swagger-ui")
+	log.Printf("   �📚 Custom Docs: http://localhost:8080/docs")
+	log.Printf("   📄 Swagger JSON: http://localhost:8080/swagger.json")
 
 	<-a.ctx.Done()
 	log.Println("Application context cancelled, exiting Run()")
@@ -169,6 +175,10 @@ func (a *App) setupMiddleware() {
 }
 
 func (a *App) setupRoutes() {
+	// Swagger Documentation Routes
+	a.setupSwaggerRoutes()
+
+	// Публичные API endpoints
 	a.router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/health", a.handleHealth)
 		r.Get("/ping", a.handlePing)
@@ -392,7 +402,6 @@ func (a *App) handleLivenessCheck(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"alive","timestamp":"2026-03-15T14:57:00Z","uptime":"2h30m15s"}`))
 }
 
-// Sync Management Handlers
 func (a *App) handleStartSync(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -417,7 +426,6 @@ func (a *App) handleListSyncJobs(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`[{"id":"job-1","node_id":"local","status":"running","progress":75},{"id":"job-2","node_id":"cloud","status":"completed","progress":100}]`))
 }
 
-// Storage Management Handlers
 func (a *App) handleListStorages(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -470,6 +478,110 @@ func (a *App) handleGetStorageUsage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"storage_id":"storage-1","total_bytes":1000000000000,"used_bytes":500000000000,"available_bytes":500000000000,"file_count":15000,"usage_percent":50.0}`))
+}
+
+func (a *App) setupSwaggerRoutes() {
+	a.router.Get("/swagger.json", func(w http.ResponseWriter, r *http.Request) {
+		swaggerJSON, err := docs.SwaggerJSON()
+		if err != nil {
+			http.Error(w, "Swagger JSON not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(swaggerJSON)
+	})
+
+	a.router.Get("/swagger.yaml", func(w http.ResponseWriter, r *http.Request) {
+		swaggerYAML, err := docs.SwaggerYAML()
+		if err != nil {
+			http.Error(w, "Swagger YAML not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-yaml")
+		w.Write(swaggerYAML)
+	})
+
+	a.router.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+	})
+
+	a.router.Get("/swagger-ui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusMovedPermanently)
+	})
+
+	a.router.Handle("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger.json"),
+	))
+
+	a.router.Get("/docs", func(w http.ResponseWriter, r *http.Request) {
+		html := `<!DOCTYPE html>
+<html>
+<head>
+    <title>SyncVault API Documentation</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui.css" />
+    <style>
+        html { box-sizing: border-box; overflow: -moz-scrollbars-vertical; overflow-y: scroll; }
+        *, *:before, *:after { box-sizing: inherit; }
+        body { margin:0; background: #fafafa; }
+        .swagger-ui .topbar { display: none; }
+        .custom-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .custom-header h1 {
+            margin: 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+        .custom-header p {
+            margin: 10px 0 0 0;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="custom-header">
+        <h1>🚀 SyncVault API</h1>
+        <p>Distributed File Synchronization System</p>
+    </div>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui-bundle.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@4.15.5/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            const ui = SwaggerUIBundle({
+                url: '/swagger.json',
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout",
+                defaultModelsExpandDepth: 2,
+                displayRequestDuration: true,
+                docExpansion: "none",
+                operationsSorter: "alpha",
+                tagsSorter: "alpha",
+                tryItOutEnabled: true,
+                filter: true,
+                supportedSubmitMethods: ['get', 'post', 'put', 'delete', 'patch']
+            });
+        };
+    </script>
+</body>
+</html>`
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(html))
+	})
 }
 
 /*
