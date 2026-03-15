@@ -16,6 +16,7 @@ import (
 
 	"syncvault/docs"
 	"syncvault/internal/app/handlers"
+	"syncvault/internal/cache"
 	"syncvault/internal/config"
 	"syncvault/internal/db"
 	"syncvault/internal/domain/ports"
@@ -34,6 +35,7 @@ type App struct {
 	mu          sync.RWMutex
 	config      *config.Config
 	db          *pgxpool.Pool
+	redis       RedisComponents
 	fileRepo    ports.FileRepository
 	fileService *services.FileService
 	fileHandler *handlers.FileHandler
@@ -71,7 +73,14 @@ func New(opts ...Option) (*App, error) {
 
 func (a *App) setupDependencies() {
 	// Create repository (Infrastructure layer)
-	a.fileRepo = database.NewFileRepository(a.db)
+	baseRepo := database.NewFileRepository(a.db)
+
+	// Wrap with cache if Redis is available
+	if a.redis.Client != nil {
+		a.fileRepo = cache.NewCachedFileRepository(baseRepo, a.redis.FileCache)
+	} else {
+		a.fileRepo = baseRepo
+	}
 
 	// Create service (Domain layer)
 	a.fileService = services.NewFileService(a.fileRepo, nil) // Storage can be nil for now
@@ -82,15 +91,35 @@ func (a *App) setupDependencies() {
 
 // connectDB подключается к базе данных
 func (a *App) connectDB() error {
-	connString := "postgres://postgres:postgres@localhost:5432/syncvault?sslmode=disable"
+	// Формируем строку подключения из конфигурации
+	connString := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		a.config.Database.User,
+		a.config.Database.Password,
+		a.config.Database.Host,
+		a.config.Database.Port,
+		a.config.Database.DBName,
+		a.config.Database.SSLMode,
+	)
 
-	pool, err := pgxpool.New(a.ctx, connString)
+	poolConfig, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return fmt.Errorf("failed to parse database config: %w", err)
+	}
+
+	// Настраиваем пул соединений
+	poolConfig.MaxConns = int32(a.config.Database.MaxOpenConns)
+	poolConfig.MinConns = int32(a.config.Database.MaxIdleConns)
+	poolConfig.HealthCheckPeriod = 1 * time.Minute
+	poolConfig.MaxConnLifetime = a.config.Database.ConnMaxLifetime
+
+	pool, err := pgxpool.NewWithConfig(a.ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
 	a.db = pool
-	log.Println("✓ Connected to database")
+	log.Printf("✓ Connected to database at %s:%d/%s",
+		a.config.Database.Host, a.config.Database.Port, a.config.Database.DBName)
 
 	// Проверяем подключение
 	var result int
@@ -171,29 +200,42 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.shutdown {
-		a.mu.Unlock()
 		return nil
 	}
-	a.shutdown = true
-	a.mu.Unlock()
 
+	a.shutdown = true
 	log.Println("Starting application shutdown...")
 
-	// Отмена контекста для всех горутин
+	// Cancel context to stop all operations
 	a.cancel()
 
-	// Graceful shutdown HTTP сервера
-	if a.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
+	// Close Redis connection if available
+	if a.redis.Client != nil {
+		if err := a.redis.Client.Close(); err != nil {
+			log.Printf("Error closing Redis connection: %v", err)
+		} else {
+			log.Println("✓ Redis connection closed")
 		}
 	}
 
-	a.wg.Wait()
+	// Close database connection
+	if a.db != nil {
+		a.db.Close()
+		log.Println("✓ Database connection closed")
+	}
+
+	// Shutdown HTTP server
+	if a.httpServer != nil {
+		if err := a.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("Error shutting down HTTP server: %v", err)
+		} else {
+			log.Println("✓ HTTP server shut down")
+		}
+	}
+
 	log.Println("Application shutdown completed")
 	return nil
 }

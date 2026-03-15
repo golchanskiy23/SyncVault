@@ -3,7 +3,9 @@ package valueobjects
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 type FileID struct {
@@ -40,6 +42,14 @@ func (f FileID) IsEmpty() bool {
 
 func (f FileID) Equals(other FileID) bool {
 	return f.value == other.value
+}
+
+func (f FileID) Int64() (int64, error) {
+	id, err := strconv.ParseInt(f.value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid FileID format: %w", err)
+	}
+	return id, nil
 }
 
 type StorageNodeID struct {
@@ -130,4 +140,56 @@ func (c ConflictID) IsEmpty() bool {
 
 func (c ConflictID) Equals(other ConflictID) bool {
 	return c.value == other.value
+}
+
+func (f *FileID) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + f.value + `"`), nil
+}
+
+func (f *FileID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	f.value = s
+	return nil
+}
+
+func (s *StorageNodeID) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.value + `"`), nil
+}
+
+func (s *StorageNodeID) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	s.value = str
+	return nil
+}
+
+func (s *SyncJobID) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.value + `"`), nil
+}
+
+func (s *SyncJobID) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	s.value = str
+	return nil
+}
+
+func (c *ConflictID) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + c.value + `"`), nil
+}
+
+func (c *ConflictID) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	c.value = str
+	return nil
 }

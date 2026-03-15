@@ -17,6 +17,7 @@ const (
 )
 
 type File struct {
+	FileID        valueobjects.FileID // UUID-идентификатор, используется как ключ кэша
 	ID            int64
 	FilePath      valueobjects.FilePath
 	FileHash      valueobjects.FileHash
@@ -38,6 +39,7 @@ func NewFile(
 ) *File {
 	now := time.Now()
 	return &File{
+		FileID:        valueobjects.NewFileID(),
 		FilePath:      path,
 		FileHash:      hash,
 		FileSize:      size,
@@ -49,22 +51,26 @@ func NewFile(
 	}
 }
 
-// HasSameContent checks if two files have the same content
+func (f *File) Size() int64 {
+	return f.FileSize
+}
+
+func (f *File) Path() valueobjects.FilePath {
+	return f.FilePath
+}
+
 func (f *File) HasSameContent(other *File) bool {
 	return f.FileHash.String() == other.FileHash.String()
 }
 
-// Status returns the file status
 func (f *File) Status() FileStatus {
 	return f.FileStatus
 }
 
-// UpdatedAt returns the modification time
 func (f *File) UpdatedAt() time.Time {
 	return f.ModifiedAt
 }
 
-// MarkAsSynced marks the file as synced
 func (f *File) MarkAsSynced() {
 	f.FileStatus = FileStatusSynced
 	now := time.Now()

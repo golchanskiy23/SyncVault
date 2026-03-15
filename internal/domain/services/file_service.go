@@ -143,7 +143,12 @@ func (s *FileService) ListFiles(ctx context.Context, req ListFilesRequest) (*Lis
 func (s *FileService) GetFile(ctx context.Context, userID, fileID int64) (*entities.File, error) {
 	log.Printf("FileService: Getting file %d for user %d", fileID, userID)
 
-	file, err := s.fileRepo.GetByID(ctx, fileID)
+	// Convert int64 to valueobjects.FileID
+	voFileID, err := valueobjects.FileIDFromString(fmt.Sprintf("%d", fileID))
+	if err != nil {
+		return nil, fmt.Errorf("invalid file ID: %w", err)
+	}
+	file, err := s.fileRepo.FindByID(ctx, voFileID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file: %w", err)
 	}
@@ -160,8 +165,14 @@ func (s *FileService) GetFile(ctx context.Context, userID, fileID int64) (*entit
 func (s *FileService) DeleteFile(ctx context.Context, userID, fileID int64) error {
 	log.Printf("FileService: Deleting file %d for user %d", fileID, userID)
 
+	// Convert int64 to valueobjects.FileID
+	voFileID, err := valueobjects.FileIDFromString(fmt.Sprintf("%d", fileID))
+	if err != nil {
+		return fmt.Errorf("invalid file ID: %w", err)
+	}
+
 	// Get file first to check ownership
-	file, err := s.fileRepo.GetByID(ctx, fileID)
+	file, err := s.fileRepo.FindByID(ctx, voFileID)
 	if err != nil {
 		return fmt.Errorf("failed to get file: %w", err)
 	}
@@ -171,8 +182,7 @@ func (s *FileService) DeleteFile(ctx context.Context, userID, fileID int64) erro
 		return fmt.Errorf("access denied: file does not belong to user")
 	}
 
-	// Delete from repository
-	err = s.fileRepo.Delete(ctx, fileID)
+	err = s.fileRepo.Delete(ctx, voFileID)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}

@@ -39,7 +39,7 @@ type EventBus interface {
 type SyncStrategy interface {
 	Name() string
 	CanHandle(ctx context.Context, source, target valueobjects.StorageNodeID) bool
-	Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.FileObject) error
+	Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.File) error
 }
 
 type IncrementalSyncStrategy struct {
@@ -54,7 +54,7 @@ func (s *IncrementalSyncStrategy) CanHandle(ctx context.Context, source, target 
 	return true
 }
 
-func (s *IncrementalSyncStrategy) Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.FileObject) error {
+func (s *IncrementalSyncStrategy) Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.File) error {
 	for _, file := range files {
 		if file.Status() == entities.FileStatusModified {
 			if err := s.syncFile(ctx, source, target, file); err != nil {
@@ -65,7 +65,7 @@ func (s *IncrementalSyncStrategy) Sync(ctx context.Context, source, target value
 	return nil
 }
 
-func (s *IncrementalSyncStrategy) syncFile(ctx context.Context, source, target valueobjects.StorageNodeID, file *entities.FileObject) error {
+func (s *IncrementalSyncStrategy) syncFile(ctx context.Context, source, target valueobjects.StorageNodeID, file *entities.File) error {
 	file.MarkAsSynced()
 	return s.fileRepo.Save(ctx, file)
 }
@@ -82,7 +82,7 @@ func (s *FullSyncStrategy) CanHandle(ctx context.Context, source, target valueob
 	return true
 }
 
-func (s *FullSyncStrategy) Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.FileObject) error {
+func (s *FullSyncStrategy) Sync(ctx context.Context, source, target valueobjects.StorageNodeID, files []*entities.File) error {
 	for _, file := range files {
 		if err := s.syncFile(ctx, source, target, file); err != nil {
 			return fmt.Errorf("failed to sync file %s: %w", file.Path().String(), err)
@@ -91,7 +91,7 @@ func (s *FullSyncStrategy) Sync(ctx context.Context, source, target valueobjects
 	return nil
 }
 
-func (s *FullSyncStrategy) syncFile(ctx context.Context, source, target valueobjects.StorageNodeID, file *entities.FileObject) error {
+func (s *FullSyncStrategy) syncFile(ctx context.Context, source, target valueobjects.StorageNodeID, file *entities.File) error {
 	file.MarkAsSynced()
 	return s.fileRepo.Save(ctx, file)
 }
@@ -149,8 +149,8 @@ func (uc *SyncUseCaseImpl) selectStrategy(ctx context.Context, source, target va
 	return nil
 }
 
-func (uc *SyncUseCaseImpl) getFiles(ctx context.Context, fileIDs []valueobjects.FileID) ([]*entities.FileObject, error) {
-	files := make([]*entities.FileObject, len(fileIDs))
+func (uc *SyncUseCaseImpl) getFiles(ctx context.Context, fileIDs []valueobjects.FileID) ([]*entities.File, error) {
+	files := make([]*entities.File, len(fileIDs))
 	for i, fileID := range fileIDs {
 		file, err := uc.fileRepo.FindByID(ctx, fileID)
 		if err != nil {
