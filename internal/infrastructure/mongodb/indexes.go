@@ -115,28 +115,31 @@ func CreateIndexes(ctx context.Context, db *mongo.Database) error {
 
 	// Create all indexes
 	log.Println("Creating indexes for sync_audit collection...")
-	
+
 	for i, indexModel := range indexModels {
-		name := indexModel.Options.GetName()
-		if name == "" {
+		name := indexModel.Options.Name
+		if name == nil || *name == "" {
 			// Generate name if not provided
-			name = fmt.Sprintf("index_%d", i)
-			indexModel.Options.SetName(name)
+			generatedName := fmt.Sprintf("index_%d", i)
+			indexModel.Options.Name = &generatedName
+		} else {
+			// Use existing name
+			name = indexModel.Options.Name
 		}
 
-		log.Printf("Creating index: %s", name)
-		
+		log.Printf("Creating index: %s", *name)
+
 		_, err := collection.Indexes().CreateOne(ctx, indexModel)
 		if err != nil {
 			// Check if index already exists
 			if mongoErr, ok := err.(mongo.CommandError); ok && mongoErr.Code == 48 {
-				log.Printf("Index %s already exists, skipping", name)
+				log.Printf("Index %s already exists, skipping", *name)
 				continue
 			}
-			return fmt.Errorf("failed to create index %s: %w", name, err)
+			return fmt.Errorf("failed to create index %s: %w", *name, err)
 		}
-		
-		log.Printf("✓ Created index: %s", name)
+
+		log.Printf("✓ Created index: %s", *name)
 	}
 
 	// Verify indexes were created
@@ -146,7 +149,7 @@ func CreateIndexes(ctx context.Context, db *mongo.Database) error {
 // verifyIndexes checks that all expected indexes exist
 func verifyIndexes(ctx context.Context, collection *mongo.Collection) error {
 	log.Println("Verifying created indexes...")
-	
+
 	cursor, err := collection.Indexes().List(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list indexes: %w", err)
@@ -160,7 +163,7 @@ func verifyIndexes(ctx context.Context, collection *mongo.Collection) error {
 			log.Printf("Error decoding index: %v", err)
 			continue
 		}
-		
+
 		if name, ok := index["name"].(string); ok {
 			indexNames = append(indexNames, name)
 		}
@@ -191,7 +194,7 @@ func verifyIndexes(ctx context.Context, collection *mongo.Collection) error {
 	}
 
 	log.Printf("Found %d indexes: %v", len(indexNames), indexNames)
-	
+
 	for _, expected := range expectedIndexes {
 		found := false
 		for _, existing := range indexNames {
@@ -213,9 +216,9 @@ func verifyIndexes(ctx context.Context, collection *mongo.Collection) error {
 // DropIndexes drops all custom indexes (keeps only _id_)
 func DropIndexes(ctx context.Context, db *mongo.Database) error {
 	collection := db.Collection("sync_audit")
-	
+
 	log.Println("Dropping custom indexes from sync_audit collection...")
-	
+
 	// List all indexes
 	cursor, err := collection.Indexes().List(ctx)
 	if err != nil {
@@ -229,13 +232,13 @@ func DropIndexes(ctx context.Context, db *mongo.Database) error {
 			log.Printf("Error decoding index: %v", err)
 			continue
 		}
-		
+
 		name, ok := index["name"].(string)
 		if !ok || name == "_id_" {
 			// Skip _id_ index (default MongoDB index)
 			continue
 		}
-		
+
 		log.Printf("Dropping index: %s", name)
 		_, err := collection.Indexes().DropOne(ctx, name)
 		if err != nil {
@@ -251,7 +254,7 @@ func DropIndexes(ctx context.Context, db *mongo.Database) error {
 // GetIndexStats returns statistics about the sync_audit collection indexes
 func GetIndexStats(ctx context.Context, db *mongo.Database) (*IndexStats, error) {
 	collection := db.Collection("sync_audit")
-	
+
 	// Get collection stats
 	stats := collection.Database().RunCommand(ctx, bson.D{
 		{"collStats", "sync_audit"},
@@ -265,9 +268,9 @@ func GetIndexStats(ctx context.Context, db *mongo.Database) (*IndexStats, error)
 
 	indexStats := &IndexStats{
 		CollectionName: "sync_audit",
-		IndexCount:    0,
+		IndexCount:     0,
 		TotalIndexSize: 0,
-		Indexes:       make([]IndexDetail, 0),
+		Indexes:        make([]IndexDetail, 0),
 	}
 
 	if indexDetails, ok := result["indexDetails"].(bson.M); ok {
@@ -276,12 +279,12 @@ func GetIndexStats(ctx context.Context, db *mongo.Database) (*IndexStats, error)
 				indexDetail := IndexDetail{
 					Name: name,
 				}
-				
+
 				if size, ok := detailMap["size"].(int64); ok {
 					indexDetail.Size = size
 					indexStats.TotalIndexSize += size
 				}
-				
+
 				indexStats.IndexCount++
 				indexStats.Indexes = append(indexStats.Indexes, indexDetail)
 			}
@@ -294,9 +297,9 @@ func GetIndexStats(ctx context.Context, db *mongo.Database) (*IndexStats, error)
 // IndexStats represents statistics about collection indexes
 type IndexStats struct {
 	CollectionName string        `json:"collectionName"`
-	IndexCount    int           `json:"indexCount"`
+	IndexCount     int           `json:"indexCount"`
 	TotalIndexSize int64         `json:"totalIndexSize"`
-	Indexes       []IndexDetail `json:"indexes"`
+	Indexes        []IndexDetail `json:"indexes"`
 }
 
 // IndexDetail represents details of a single index
@@ -308,13 +311,13 @@ type IndexDetail struct {
 // CreateCollectionWithValidation creates the sync_audit collection with schema validation
 func CreateCollectionWithValidation(ctx context.Context, db *mongo.Database) error {
 	collectionName := "sync_audit"
-	
+
 	// Check if collection already exists
 	collections, err := db.ListCollectionNames(ctx, bson.M{"name": collectionName})
 	if err != nil {
 		return fmt.Errorf("failed to list collections: %w", err)
 	}
-	
+
 	if len(collections) > 0 {
 		log.Printf("Collection %s already exists", collectionName)
 		return nil
@@ -331,7 +334,7 @@ func CreateCollectionWithValidation(ctx context.Context, db *mongo.Database) err
 			},
 			"properties": bson.M{
 				"timestamp": bson.M{
-					"bsonType": "date",
+					"bsonType":    "date",
 					"description": "When the audit event occurred",
 				},
 				"eventType": bson.M{
@@ -364,34 +367,34 @@ func CreateCollectionWithValidation(ctx context.Context, db *mongo.Database) err
 					"description": "Status of the operation",
 				},
 				"syncJobId": bson.M{
-					"bsonType": "objectId",
+					"bsonType":    "objectId",
 					"description": "ID of the sync job (optional)",
 				},
 				"fileId": bson.M{
-					"bsonType": "objectId",
+					"bsonType":    "objectId",
 					"description": "ID of the file (optional)",
 				},
 				"sourceNodeId": bson.M{
-					"bsonType": "objectId",
+					"bsonType":    "objectId",
 					"description": "ID of the source node (optional)",
 				},
 				"targetNodeId": bson.M{
-					"bsonType": "objectId",
+					"bsonType":    "objectId",
 					"description": "ID of the target node (optional)",
 				},
 				"duration": bson.M{
-					"bsonType": "long",
-					"minimum": 0,
+					"bsonType":    "long",
+					"minimum":     0,
 					"description": "Duration in milliseconds (optional)",
 				},
 				"bytesTransferred": bson.M{
-					"bsonType": "long",
-					"minimum": 0,
+					"bsonType":    "long",
+					"minimum":     0,
 					"description": "Number of bytes transferred (optional)",
 				},
 				"retryCount": bson.M{
-					"bsonType": "int",
-					"minimum": 0,
+					"bsonType":    "int",
+					"minimum":     0,
 					"description": "Number of retry attempts (optional)",
 				},
 			},

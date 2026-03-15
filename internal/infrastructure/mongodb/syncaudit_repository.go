@@ -168,9 +168,23 @@ func (r *SyncAuditRepository) FindRecent(ctx context.Context, hours int) ([]*ent
 }
 
 // FindWithPagination finds sync audit events with pagination
-func (r *SyncAuditRepository) FindWithPagination(ctx context.Context, filter bson.M, page, limit int) ([]*entities.SyncAudit, int64, error) {
+func (r *SyncAuditRepository) FindWithPagination(ctx context.Context, filter interface{}, page, limit int) ([]*entities.SyncAudit, int64, error) {
 	// Count total documents
-	total, err := r.collection.CountDocuments(ctx, filter)
+	var filterDoc bson.M
+	if filter != nil {
+		// Convert interface{} to bson.M if needed
+		if filterMap, ok := filter.(map[string]interface{}); ok {
+			filterDoc = bson.M(filterMap)
+		} else if filterBson, ok := filter.(bson.M); ok {
+			filterDoc = filterBson
+		} else {
+			filterDoc = bson.M{}
+		}
+	} else {
+		filterDoc = bson.M{}
+	}
+
+	total, err := r.collection.CountDocuments(ctx, filterDoc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to count documents: %w", err)
 	}
@@ -181,13 +195,13 @@ func (r *SyncAuditRepository) FindWithPagination(ctx context.Context, filter bso
 		skip = 0
 	}
 
-	// Find documents with pagination
+	// Find with filter and options
 	opts := options.Find().
 		SetSort(bson.D{{"timestamp", -1}}). // Sort by timestamp descending
 		SetSkip(int64(skip)).
 		SetLimit(int64(limit))
 
-	cursor, err := r.collection.Find(ctx, filter, opts)
+	cursor, err := r.collection.Find(ctx, filterDoc, opts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to find documents: %w", err)
 	}

@@ -24,6 +24,7 @@ import (
 	"syncvault/internal/domain/repositories"
 	"syncvault/internal/domain/services"
 	"syncvault/internal/infrastructure/database"
+	mongoinfra "syncvault/internal/infrastructure/mongodb"
 )
 
 type App struct {
@@ -144,7 +145,7 @@ func (a *App) connectDB() error {
 
 // connectMongoDB connects to MongoDB
 func (a *App) connectMongoDB() error {
-	db, err := mongodb.NewMongoConnection(a.config)
+	db, err := mongoinfra.NewMongoConnection(a.config)
 	if err != nil {
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
@@ -153,7 +154,7 @@ func (a *App) connectMongoDB() error {
 	log.Printf("✓ Connected to MongoDB at %s/%s", a.config.MongoDB.URI, a.config.MongoDB.Database)
 
 	// Initialize audit repository
-	a.auditRepo = mongodb.NewSyncAuditRepository(db)
+	a.auditRepo = mongoinfra.NewSyncAuditRepository(db)
 	a.auditService = services.NewAuditService(a.auditRepo)
 
 	return nil
@@ -256,7 +257,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 	// Close MongoDB connection
 	if a.mongoDB != nil {
-		if err := mongodb.CloseMongoConnection(ctx, a.mongoDB); err != nil {
+		if err := mongoinfra.CloseMongoConnection(ctx, a.mongoDB); err != nil {
 			log.Printf("Error closing MongoDB connection: %v", err)
 		} else {
 			log.Println("✓ MongoDB connection closed")
