@@ -1,0 +1,1874 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "SyncVault API",
+    "version": "1.0.0",
+    "description": "Distributed file synchronization system with REST API.\n\nFeatures:\n- File management with CRUD operations\n- Synchronization job management\n- Storage management\n- Real-time status monitoring\n",
+    "contact": {
+      "name": "SyncVault Team",
+      "email": "support@syncvault.com",
+      "url": "https://syncvault.com"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Development server"
+    },
+    {
+      "url": "https://api.syncvault.com",
+      "description": "Production server"
+    },
+    {
+      "url": "https://staging-api.syncvault.com",
+      "description": "Staging server"
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Check if the API is healthy and running",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "API is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "healthy",
+                  "service": "syncvault",
+                  "timestamp": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ping": {
+      "get": {
+        "summary": "Ping endpoint",
+        "description": "Simple ping for connectivity testing",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Ping successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PingResponse"
+                },
+                "example": {
+                  "message": "pong"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files": {
+      "get": {
+        "summary": "List files",
+        "description": "Get a paginated list of all files in the system",
+        "tags": [
+          "Files"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Page number for pagination",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Number of items per page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "description": "Filter by node ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sync_status",
+            "in": "query",
+            "description": "Filter by sync status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "syncing",
+                "synced",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of files retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileListResponse"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "file-123",
+                      "path": "/documents/report.pdf",
+                      "size": 1024,
+                      "node_id": "local-storage",
+                      "sync_status": "synced",
+                      "created_at": "2026-03-15T14:57:00Z",
+                      "updated_at": "2026-03-15T14:57:00Z"
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "limit": 20,
+                    "total": 150,
+                    "total_pages": 8,
+                    "has_next": true,
+                    "has_prev": false
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create file",
+        "description": "Create a new file record in the synchronization system",
+        "tags": [
+          "Files"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFileRequest"
+              },
+              "example": {
+                "path": "/documents/report.pdf",
+                "size": 1024,
+                "node_id": "local-storage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                },
+                "example": {
+                  "id": "file-123",
+                  "path": "/documents/report.pdf",
+                  "size": 1024,
+                  "node_id": "local-storage",
+                  "sync_status": "pending",
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/files/{fileID}": {
+      "get": {
+        "summary": "Get file",
+        "description": "Get detailed information about a specific file",
+        "tags": [
+          "Files"
+        ],
+        "parameters": [
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the file",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                },
+                "example": {
+                  "id": "file-123",
+                  "path": "/documents/report.pdf",
+                  "size": 1024,
+                  "node_id": "local-storage",
+                  "sync_status": "synced",
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update file",
+        "description": "Update file information (full replacement)",
+        "tags": [
+          "Files"
+        ],
+        "parameters": [
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the file",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFileRequest"
+              },
+              "example": {
+                "path": "/documents/updated-report.pdf",
+                "size": 2048,
+                "sync_status": "synced"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/File"
+                },
+                "example": {
+                  "id": "file-123",
+                  "path": "/documents/updated-report.pdf",
+                  "size": 2048,
+                  "node_id": "local-storage",
+                  "sync_status": "synced",
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:58:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete file",
+        "description": "Delete a file from the system",
+        "tags": [
+          "Files"
+        ],
+        "parameters": [
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the file",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "File deleted successfully"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/start": {
+      "post": {
+        "summary": "Start synchronization",
+        "description": "Start a new synchronization job",
+        "tags": [
+          "Sync"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSyncRequest"
+              },
+              "example": {
+                "node_id": "local-storage",
+                "paths": [
+                  "/documents",
+                  "/photos"
+                ],
+                "recursive": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Synchronization started successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                },
+                "example": {
+                  "job_id": "sync-job-123",
+                  "node_id": "local-storage",
+                  "status": "started",
+                  "progress": 0,
+                  "files_processed": 0,
+                  "files_total": 0,
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "started_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/stop": {
+      "post": {
+        "summary": "Stop synchronization",
+        "description": "Stop all active synchronization jobs",
+        "tags": [
+          "Sync"
+        ],
+        "responses": {
+          "200": {
+            "description": "Synchronization stopped successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopSyncResponse"
+                },
+                "example": {
+                  "message": "Sync stopped",
+                  "status": "stopped"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/status": {
+      "get": {
+        "summary": "Get sync status",
+        "description": "Get overall synchronization system status",
+        "tags": [
+          "Sync"
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync status retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                },
+                "example": {
+                  "status": "running",
+                  "active_jobs": 3,
+                  "completed_jobs": 125,
+                  "failed_jobs": 2,
+                  "files_processed": 1500,
+                  "files_total": 2000,
+                  "last_sync_at": "2026-03-15T14:55:00Z"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/jobs": {
+      "get": {
+        "summary": "List sync jobs",
+        "description": "Get a list of all synchronization jobs",
+        "tags": [
+          "Sync"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by job status",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "running",
+                "completed",
+                "failed",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "description": "Filter by node ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync jobs retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJobListResponse"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "job_id": "job-1",
+                      "node_id": "local",
+                      "status": "running",
+                      "progress": 75,
+                      "files_processed": 1500,
+                      "files_total": 2000,
+                      "created_at": "2026-03-15T14:57:00Z",
+                      "started_at": "2026-03-15T14:57:00Z"
+                    },
+                    {
+                      "job_id": "job-2",
+                      "node_id": "cloud",
+                      "status": "completed",
+                      "progress": 100,
+                      "files_processed": 500,
+                      "files_total": 500,
+                      "created_at": "2026-03-15T14:50:00Z",
+                      "started_at": "2026-03-15T14:50:00Z",
+                      "completed_at": "2026-03-15T14:52:00Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/jobs/{jobID}": {
+      "get": {
+        "summary": "Get sync job",
+        "description": "Get detailed information about a specific sync job",
+        "tags": [
+          "Sync"
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the sync job",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync job retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                },
+                "example": {
+                  "job_id": "job-123",
+                  "node_id": "local",
+                  "status": "running",
+                  "progress": 75,
+                  "files_processed": 1500,
+                  "files_total": 2000,
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "started_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/sync/jobs/{jobID}/cancel": {
+      "post": {
+        "summary": "Cancel sync job",
+        "description": "Cancel a running or pending synchronization job",
+        "tags": [
+          "Sync"
+        ],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the sync job",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync job cancelled successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelSyncJobResponse"
+                },
+                "example": {
+                  "message": "Sync job cancelled",
+                  "status": "cancelled"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages": {
+      "get": {
+        "summary": "List storages",
+        "description": "Get a list of all configured storage systems",
+        "tags": [
+          "Storages"
+        ],
+        "responses": {
+          "200": {
+            "description": "Storages retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageListResponse"
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "storage-1",
+                      "name": "Local Storage",
+                      "type": "local",
+                      "status": "connected",
+                      "capacity": 1000000000000,
+                      "used": 500000000000,
+                      "enabled": true,
+                      "created_at": "2026-03-15T14:57:00Z",
+                      "updated_at": "2026-03-15T14:57:00Z"
+                    },
+                    {
+                      "id": "storage-2",
+                      "name": "Cloud Storage",
+                      "type": "s3",
+                      "status": "connected",
+                      "capacity": 10000000000000,
+                      "used": 2000000000000,
+                      "enabled": true,
+                      "created_at": "2026-03-15T14:57:00Z",
+                      "updated_at": "2026-03-15T14:57:00Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create storage",
+        "description": "Create a new storage configuration",
+        "tags": [
+          "Storages"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStorageRequest"
+              },
+              "example": {
+                "name": "Cloud Storage",
+                "type": "s3",
+                "config": {
+                  "bucket": "syncvault-backup",
+                  "region": "us-west-2",
+                  "access_key": "AKIA...",
+                  "secret_key": "..."
+                },
+                "enabled": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Storage created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Storage"
+                },
+                "example": {
+                  "id": "storage-3",
+                  "name": "Cloud Storage",
+                  "type": "s3",
+                  "status": "disconnected",
+                  "capacity": 0,
+                  "used": 0,
+                  "enabled": true,
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages/{storageID}": {
+      "get": {
+        "summary": "Get storage",
+        "description": "Get detailed information about a specific storage",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Storage"
+                },
+                "example": {
+                  "id": "storage-1",
+                  "name": "Local Storage",
+                  "type": "local",
+                  "status": "connected",
+                  "capacity": 1000000000000,
+                  "used": 500000000000,
+                  "config": {
+                    "path": "/syncvault/data"
+                  },
+                  "enabled": true,
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:57:00Z"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "put": {
+        "summary": "Update storage",
+        "description": "Update storage configuration",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStorageRequest"
+              },
+              "example": {
+                "name": "Updated Storage",
+                "enabled": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Storage updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Storage"
+                },
+                "example": {
+                  "id": "storage-1",
+                  "name": "Updated Storage",
+                  "type": "local",
+                  "status": "connected",
+                  "capacity": 1000000000000,
+                  "used": 500000000000,
+                  "config": {
+                    "path": "/syncvault/data"
+                  },
+                  "enabled": true,
+                  "created_at": "2026-03-15T14:57:00Z",
+                  "updated_at": "2026-03-15T14:58:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete storage",
+        "description": "Delete a storage configuration",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Storage deleted successfully"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages/{storageID}/connect": {
+      "post": {
+        "summary": "Connect storage",
+        "description": "Connect to a storage system",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage connected successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageOperationResponse"
+                },
+                "example": {
+                  "message": "Storage connected successfully",
+                  "status": "connected"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages/{storageID}/disconnect": {
+      "post": {
+        "summary": "Disconnect storage",
+        "description": "Disconnect from a storage system",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage disconnected successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageOperationResponse"
+                },
+                "example": {
+                  "message": "Storage disconnected successfully",
+                  "status": "disconnected"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages/{storageID}/status": {
+      "get": {
+        "summary": "Get storage status",
+        "description": "Get connection status and health information for a storage",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage status retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageStatusResponse"
+                },
+                "example": {
+                  "storage_id": "storage-1",
+                  "status": "connected",
+                  "last_check": "2026-03-15T14:57:00Z",
+                  "latency_ms": 15,
+                  "error_count": 0,
+                  "uptime": "99.9%"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/storages/{storageID}/usage": {
+      "get": {
+        "summary": "Get storage usage",
+        "description": "Get storage capacity and usage information",
+        "tags": [
+          "Storages"
+        ],
+        "parameters": [
+          {
+            "name": "storageID",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the storage",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage usage retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUsageResponse"
+                },
+                "example": {
+                  "storage_id": "storage-1",
+                  "total_bytes": 1000000000000,
+                  "used_bytes": 500000000000,
+                  "available_bytes": 500000000000,
+                  "file_count": 15000,
+                  "usage_percent": 50.0
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "unhealthy"
+            ],
+            "example": "healthy"
+          },
+          "service": {
+            "type": "string",
+            "example": "syncvault"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          }
+        },
+        "required": [
+          "status",
+          "service"
+        ]
+      },
+      "PingResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "pong"
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "File": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "file-123"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 255,
+            "example": "/documents/report.pdf"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1024
+          },
+          "node_id": {
+            "type": "string",
+            "example": "local-storage"
+          },
+          "sync_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "syncing",
+              "synced",
+              "failed"
+            ],
+            "example": "synced"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "size",
+          "node_id",
+          "sync_status",
+          "created_at"
+        ]
+      },
+      "CreateFileRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 255,
+            "example": "/documents/report.pdf"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1024
+          },
+          "node_id": {
+            "type": "string",
+            "example": "local-storage"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "node_id"
+        ]
+      },
+      "UpdateFileRequest": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 255,
+            "example": "/documents/updated-report.pdf"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 2048
+          },
+          "sync_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "syncing",
+              "synced",
+              "failed"
+            ],
+            "example": "synced"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "sync_status"
+        ]
+      },
+      "FileListResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/File"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/Pagination"
+          }
+        },
+        "required": [
+          "data",
+          "pagination"
+        ]
+      },
+      "SyncJob": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "sync-job-123"
+          },
+          "node_id": {
+            "type": "string",
+            "example": "local-storage"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "example": "running"
+          },
+          "progress": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "example": 75
+          },
+          "files_processed": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1500
+          },
+          "files_total": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 2000
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T15:00:00Z"
+          }
+        },
+        "required": [
+          "job_id",
+          "node_id",
+          "status",
+          "created_at"
+        ]
+      },
+      "StartSyncRequest": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "example": "local-storage"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "example": [
+              "/documents",
+              "/photos"
+            ]
+          },
+          "recursive": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "node_id"
+        ]
+      },
+      "StopSyncResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Sync stopped"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "already_stopped"
+            ],
+            "example": "stopped"
+          }
+        },
+        "required": [
+          "message",
+          "status"
+        ]
+      },
+      "SyncStatusResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "stopped",
+              "idle"
+            ],
+            "example": "running"
+          },
+          "active_jobs": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 3
+          },
+          "completed_jobs": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 125
+          },
+          "failed_jobs": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 2
+          },
+          "files_processed": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1500
+          },
+          "files_total": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 2000
+          },
+          "last_sync_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:55:00Z"
+          }
+        },
+        "required": [
+          "status",
+          "active_jobs",
+          "completed_jobs",
+          "failed_jobs"
+        ]
+      },
+      "SyncJobListResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncJob"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "CancelSyncJobResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Sync job cancelled"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "already_cancelled",
+              "cannot_cancel"
+            ],
+            "example": "cancelled"
+          }
+        },
+        "required": [
+          "message",
+          "status"
+        ]
+      },
+      "Storage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "storage-1"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Local Storage"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3",
+              "ftp",
+              "sftp",
+              "google_drive",
+              "dropbox"
+            ],
+            "example": "local"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "disconnected",
+              "error",
+              "connecting"
+            ],
+            "example": "connected"
+          },
+          "capacity": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1000000000000
+          },
+          "used": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 500000000000
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "path": "/syncvault/data"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "status",
+          "enabled",
+          "created_at"
+        ]
+      },
+      "CreateStorageRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Cloud Storage"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3",
+              "ftp",
+              "sftp",
+              "google_drive",
+              "dropbox"
+            ],
+            "example": "s3"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "bucket": "syncvault-backup",
+              "region": "us-west-2",
+              "access_key": "AKIA...",
+              "secret_key": "..."
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "config"
+        ]
+      },
+      "UpdateStorageRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "example": "Updated Storage"
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true
+          }
+        }
+      },
+      "StorageListResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Storage"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "StorageOperationResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "example": "Storage connected successfully"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "disconnected",
+              "error"
+            ],
+            "example": "connected"
+          }
+        },
+        "required": [
+          "message",
+          "status"
+        ]
+      },
+      "StorageStatusResponse": {
+        "type": "object",
+        "properties": {
+          "storage_id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "storage-1"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "disconnected",
+              "error",
+              "connecting"
+            ],
+            "example": "connected"
+          },
+          "last_check": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-03-15T14:57:00Z"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 15
+          },
+          "error_count": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 0
+          },
+          "uptime": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?%$",
+            "example": "99.9%"
+          }
+        },
+        "required": [
+          "storage_id",
+          "status",
+          "last_check"
+        ]
+      },
+      "StorageUsageResponse": {
+        "type": "object",
+        "properties": {
+          "storage_id": {
+            "type": "string",
+            "format": "uuid",
+            "example": "storage-1"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 1000000000000
+          },
+          "used_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 500000000000
+          },
+          "available_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 500000000000
+          },
+          "file_count": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 15000
+          },
+          "usage_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100,
+            "example": 50.0
+          }
+        },
+        "required": [
+          "storage_id",
+          "total_bytes",
+          "used_bytes",
+          "available_bytes",
+          "file_count",
+          "usage_percent"
+        ]
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "example": 20
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 150
+          },
+          "total_pages": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 8
+          },
+          "has_next": {
+            "type": "boolean",
+            "example": true
+          },
+          "has_prev": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "required": [
+          "page",
+          "limit",
+          "total",
+          "total_pages",
+          "has_next",
+          "has_prev"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Validation failed"
+          },
+          "message": {
+            "type": "string",
+            "example": "Invalid request parameters"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "example": "path"
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Path is required"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Bad request - invalid parameters",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Validation failed",
+              "message": "Invalid request parameters",
+              "details": [
+                {
+                  "field": "path",
+                  "message": "Path is required"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Not found",
+              "message": "Resource not found"
+            }
+          }
+        }
+      },
+      "InternalServerError": {
+        "description": "Internal server error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "error": "Internal server error",
+              "message": "An unexpected error occurred"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token for authentication"
+      },
+      "InternalToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Token",
+        "description": "Internal token for service-to-service communication"
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    },
+    {
+      "InternalToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health check and monitoring endpoints"
+    },
+    {
+      "name": "Files",
+      "description": "File management operations"
+    },
+    {
+      "name": "Sync",
+      "description": "Synchronization job management"
+    },
+    {
+      "name": "Storages",
+      "description": "Storage system management"
+    }
+  ]
+}
