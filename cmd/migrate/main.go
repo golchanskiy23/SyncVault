@@ -27,7 +27,7 @@ func main() {
 
 	config := Config{
 		DatabaseURL:    dbURL,
-		MigrationsPath: "file://../../migrations",
+		MigrationsPath: "file://./migrations",
 		Steps:          0,
 	}
 
@@ -280,8 +280,8 @@ func createMigration(config Config, name string) {
 	nextVersion := version + 1
 	versionStr := fmt.Sprintf("%04d", nextVersion)
 
-	upFile := fmt.Sprintf("../../migrations/%s_%s.up.sql", versionStr, name)
-	downFile := fmt.Sprintf("../../migrations/%s_%s.down.sql", versionStr, name)
+	upFile := fmt.Sprintf("migrations/%s_%s.up.sql", versionStr, name)
+	downFile := fmt.Sprintf("migrations/%s_%s.down.sql", versionStr, name)
 
 	upContent := fmt.Sprintf(`-- %s_%s.up.sql
 -- Add your migration SQL here
