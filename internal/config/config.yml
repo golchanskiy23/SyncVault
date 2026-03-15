@@ -47,3 +47,10 @@ lock:
   defaultTTL: 30s
   retryCount: 3
   retryDelay: 100ms
+
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "syncvault_audit"
+  timeout: 10s
+  maxPoolSize: 10
+  minPoolSize: 5
