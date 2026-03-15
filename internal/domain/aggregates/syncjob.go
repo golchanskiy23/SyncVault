@@ -6,6 +6,14 @@ import (
 	"syncvault/internal/domain/valueobjects"
 )
 
+type JobPriority string
+
+const (
+	PriorityLow    JobPriority = "low"
+	PriorityNormal JobPriority = "normal"
+	PriorityHigh   JobPriority = "high"
+)
+
 type SyncJobStatus string
 
 const (
@@ -150,6 +158,10 @@ type SyncJob struct {
 	errorMsg    string
 	progress    int
 	total       int
+	priority    JobPriority
+	retryCount  int
+	timeout     time.Duration
+	metadata    map[string]string
 }
 
 func NewSyncJob(
@@ -170,6 +182,10 @@ func NewSyncJob(
 		createdAt:  time.Now(),
 		total:      len(fileIDs),
 		progress:   0,
+		priority:   PriorityNormal,
+		retryCount: 3,
+		timeout:    30 * time.Minute,
+		metadata:   make(map[string]string),
 	}
 }
 
@@ -314,4 +330,23 @@ func (job *SyncJob) GetProgressPercentage() float64 {
 		return 0
 	}
 	return float64(job.progress) / float64(job.total) * 100
+}
+
+func (job *SyncJob) SetPriority(priority JobPriority) {
+	job.priority = priority
+}
+
+func (job *SyncJob) SetRetryCount(count int) {
+	job.retryCount = count
+}
+
+func (job *SyncJob) SetTimeout(timeout time.Duration) {
+	job.timeout = timeout
+}
+
+func (job *SyncJob) SetMetadata(key, value string) {
+	if job.metadata == nil {
+		job.metadata = make(map[string]string)
+	}
+	job.metadata[key] = value
 }
