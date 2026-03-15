@@ -109,7 +109,7 @@ func CreateIndexes(ctx context.Context, db *mongo.Database) error {
 			Keys: bson.D{{"timestamp", 1}},
 			Options: options.Index().
 				SetName("timestamp_ttl").
-				SetExpireAfterSeconds(int32((90 * 24 * time.Hour).Seconds())), // 90 days
+				SetExpireAfterSeconds(int32((30 * 24 * time.Hour).Seconds())), // 30 days
 		},
 	}
 
