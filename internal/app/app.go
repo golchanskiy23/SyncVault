@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	"syncvault/docs"
@@ -26,6 +27,7 @@ type App struct {
 	shutdown   bool
 	mu         sync.RWMutex
 	config     *config.Config
+	db         *pgxpool.Pool
 }
 
 func New(opts ...Option) (*App, error) {
@@ -48,8 +50,36 @@ func New(opts ...Option) (*App, error) {
 	return app, nil
 }
 
+// connectDB подключается к базе данных
+func (a *App) connectDB() error {
+	connString := "postgres://postgres:postgres@localhost:5432/syncvault?sslmode=disable"
+
+	pool, err := pgxpool.New(a.ctx, connString)
+	if err != nil {
+		return fmt.Errorf("failed to create connection pool: %w", err)
+	}
+
+	a.db = pool
+	log.Println("✓ Connected to database")
+
+	// Проверяем подключение
+	var result int
+	err = pool.QueryRow(a.ctx, "SELECT 1").Scan(&result)
+	if err != nil {
+		return fmt.Errorf("database connection test failed: %w", err)
+	}
+
+	log.Printf("✓ Database connection verified (result: %d)", result)
+	return nil
+}
+
 func (a *App) Run(ctx context.Context) error {
 	log.Println("Starting application...")
+
+	// Подключаемся к базе данных
+	if err := a.connectDB(); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
 
 	a.setupMiddleware()
 	a.setupRoutes()
@@ -181,8 +211,31 @@ func (a *App) InternalAuthMiddleware(next http.Handler) http.Handler {
 	return a.internalAuthMiddleware(next)
 }
 
-func (a *App) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	a.handleHealth(w, r)
+func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Проверяем подключение к базе данных
+	if a.db != nil {
+		var result int
+		err := a.db.QueryRow(r.Context(), "SELECT 1").Scan(&result)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `{"status":"unhealthy","database_error":"%v"}`, err)
+			return
+		}
+
+		// Получаем статистику базы данных
+		var userCount, fileCount int64
+		a.db.QueryRow(r.Context(), "SELECT COUNT(*) FROM users").Scan(&userCount)
+		a.db.QueryRow(r.Context(), "SELECT COUNT(*) FROM files WHERE is_deleted = false").Scan(&fileCount)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"healthy","database":"connected","users":%d,"files":%d,"result":%d}`, userCount, fileCount, result)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"unhealthy","database":"not_connected"}`))
+	}
 }
 
 func (a *App) HandlePing(w http.ResponseWriter, r *http.Request) {
@@ -311,19 +364,13 @@ func (a *App) internalAuthMiddleware(next http.Handler) http.Handler {
 }
 
 func (a *App) getInternalToken() string {
-	return "syncvault-internal-token"
-}
-
-func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"healthy","service":"syncvault"}`))
+	return "syncvault-internal-token-123"
 }
 
 func (a *App) handlePing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"message":"pong"}`))
+	w.Write([]byte(`{"message":"pong","timestamp":"2026-03-15T14:57:00Z"}`))
 }
 
 func (a *App) handleListFiles(w http.ResponseWriter, r *http.Request) {
