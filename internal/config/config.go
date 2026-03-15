@@ -67,6 +67,14 @@ type Config struct {
 		RetryDelay time.Duration `json:"retryDelay" yaml:"retryDelay"`
 	} `json:"lock" yaml:"lock"`
 
+	MongoDB struct {
+		URI         string        `json:"uri" yaml:"uri"`
+		Database    string        `json:"database" yaml:"database"`
+		Timeout     time.Duration `json:"timeout" yaml:"timeout"`
+		MaxPoolSize uint64        `json:"maxPoolSize" yaml:"maxPoolSize"`
+		MinPoolSize uint64        `json:"minPoolSize" yaml:"minPoolSize"`
+	} `json:"mongodb" yaml:"mongodb"`
+
 	// Другие секции для Kafka, NATS, БД и т.д.
 }
 
@@ -128,6 +136,13 @@ func Default() *Config {
 	cfg.Lock.DefaultTTL = 30 * time.Second
 	cfg.Lock.RetryCount = 3
 	cfg.Lock.RetryDelay = 100 * time.Millisecond
+
+	// MongoDB настройки по умолчанию
+	cfg.MongoDB.URI = "mongodb://localhost:27017"
+	cfg.MongoDB.Database = "syncvault_audit"
+	cfg.MongoDB.Timeout = 10 * time.Second
+	cfg.MongoDB.MaxPoolSize = 10
+	cfg.MongoDB.MinPoolSize = 5
 
 	return cfg
 }

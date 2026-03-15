@@ -6,6 +6,8 @@ import (
 
 	"syncvault/internal/domain/entities"
 	"syncvault/internal/domain/valueobjects"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type FileRepository interface {
@@ -46,4 +48,31 @@ type SyncEventRepository interface {
 	FindRecent(ctx context.Context, limit int) ([]*entities.SyncEvent, error)
 	Delete(ctx context.Context, id valueobjects.FileID) error
 	DeleteOldEvents(ctx context.Context, olderThan time.Time) error
+}
+
+type SyncAuditRepository interface {
+	Save(ctx context.Context, audit *entities.SyncAudit) error
+	SaveBatch(ctx context.Context, audits []*entities.SyncAudit) error
+	FindByID(ctx context.Context, id primitive.ObjectID) (*entities.SyncAudit, error)
+	FindBySyncJobID(ctx context.Context, syncJobID primitive.ObjectID) ([]*entities.SyncAudit, error)
+	FindByFileID(ctx context.Context, fileID primitive.ObjectID) ([]*entities.SyncAudit, error)
+	FindByTimeRange(ctx context.Context, startTime, endTime time.Time) ([]*entities.SyncAudit, error)
+	FindByEventType(ctx context.Context, eventType string) ([]*entities.SyncAudit, error)
+	FindByStatus(ctx context.Context, status string) ([]*entities.SyncAudit, error)
+	FindFailedEvents(ctx context.Context) ([]*entities.SyncAudit, error)
+	FindByNode(ctx context.Context, nodeID primitive.ObjectID) ([]*entities.SyncAudit, error)
+	FindByUser(ctx context.Context, userID string) ([]*entities.SyncAudit, error)
+	FindWithError(ctx context.Context) ([]*entities.SyncAudit, error)
+	FindRecent(ctx context.Context, hours int) ([]*entities.SyncAudit, error)
+	FindWithPagination(ctx context.Context, filter interface{}, page, limit int) ([]*entities.SyncAudit, int64, error)
+	GetStats(ctx context.Context) (*SyncAuditStats, error)
+	CleanupOldEvents(ctx context.Context, olderThan time.Duration) (int64, error)
+}
+
+type SyncAuditStats struct {
+	TotalEvents           int   `json:"totalEvents"`
+	SuccessfulEvents      int   `json:"successfulEvents"`
+	FailedEvents          int   `json:"failedEvents"`
+	TotalBytesTransferred int64 `json:"totalBytesTransferred"`
+	AverageDuration       int64 `json:"averageDuration"` // milliseconds
 }
