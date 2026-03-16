@@ -19,56 +19,169 @@ import (
 	commonv1 "syncvault/internal/grpc/proto/common"
 	storagev1 "syncvault/internal/grpc/proto/storage"
 	syncv1 "syncvault/internal/grpc/proto/sync"
+	"syncvault/internal/storage"
 )
 
 // SyncService микросервис для синхронизации файлов
 type SyncService struct {
 	syncv1.UnimplementedSyncServiceServer
+	deviceManager *storage.DeviceManager
+}
+
+func NewSyncService() *SyncService {
+	return &SyncService{
+		deviceManager: storage.NewDeviceManager(nil), // Здесь будет конфиг
+	}
 }
 
 func (s *SyncService) StartSync(stream syncv1.SyncService_StartSyncServer) error {
 	log.Printf("Starting sync stream")
 
-	// This is a streaming endpoint, so we need to implement streaming
-	// For this simple example, we'll just return an error
-	return fmt.Errorf("streaming not implemented in this simple example")
+	// Получаем первый запрос для регистрации устройства
+	req, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("failed to receive initial request: %w", err)
+	}
+
+	// Извлекаем информацию об устройстве из SyncStart
+	if syncStart := req.GetStart(); syncStart != nil {
+		log.Printf("Device %s starting sync", syncStart.NodeId)
+
+		storagePath := "/tmp/syncvault"
+		if p, ok := syncStart.Options["storage_path"]; ok && p != "" {
+			storagePath = p
+		}
+
+		// Регистрируем устройство если нужно
+		device, err := s.deviceManager.RegisterDevice(
+			stream.Context(),
+			syncStart.NodeId, // Используем NodeId как UserID для простоты
+			syncStart.NodeId, // Имя устройства
+			storagePath,      // Временный путь, в реальности будет из конфига
+		)
+		if err != nil {
+			return fmt.Errorf("failed to register device: %w", err)
+		}
+
+		log.Printf("Device registered: %s at %s", device.DeviceID, storagePath)
+
+		// Отправляем подтверждение
+		response := &syncv1.SyncResponse{
+			Response: &syncv1.SyncResponse_Status{
+				Status: &syncv1.SyncStatus{
+					NodeId:            syncStart.NodeId,
+					SessionId:         device.DeviceID,
+					PendingEvents:     0,
+					ProcessingEvents:  0,
+					CompletedEvents:   1,
+					FailedEvents:      0,
+					LastSync:          timestamppb.Now(),
+					AvgProcessingTime: &durationpb.Duration{Seconds: 1},
+					SuccessRate:       1.0,
+					State:             syncv1.SyncState_SYNC_STATE_CONNECTING,
+					StartedAt:         timestamppb.Now(),
+					ElapsedTime:       &durationpb.Duration{Seconds: 0},
+					BytesTransferred:  0,
+					TransferRateBps:   0.0,
+					ActiveConnections: 1,
+				},
+			},
+		}
+
+		if err := stream.Send(response); err != nil {
+			return fmt.Errorf("failed to send response: %w", err)
+		}
+
+		// Основной цикл синхронизации
+		for {
+			req, err := stream.Recv()
+			if err != nil {
+				log.Printf("Stream ended: %v", err)
+				break
+			}
+
+			// Обрабатываем разные типы запросов
+			switch req := req.Request.(type) {
+			case *syncv1.SyncRequest_Status:
+				// Запрос статуса
+				status := s.getDeviceStatus(device.DeviceID)
+				response := &syncv1.SyncResponse{
+					Response: &syncv1.SyncResponse_Status{
+						Status: status,
+					},
+				}
+				if err := stream.Send(response); err != nil {
+					return fmt.Errorf("failed to send status: %w", err)
+				}
+
+			case *syncv1.SyncRequest_Ping:
+				// Ping-pong для проверки соединения
+				response := &syncv1.SyncResponse{
+					Response: &syncv1.SyncResponse_Pong{
+						Pong: &syncv1.SyncPong{
+							NodeId:         syncStart.NodeId,
+							Timestamp:      timestamppb.Now(),
+							SequenceNumber: 1,
+							SessionId:      device.DeviceID,
+						},
+					},
+				}
+				if err := stream.Send(response); err != nil {
+					return fmt.Errorf("failed to send pong: %w", err)
+				}
+
+			case *syncv1.SyncRequest_Complete:
+				// Завершение синхронизации
+				log.Printf("Sync completed for device %s", device.DeviceID)
+				return nil
+
+			default:
+				log.Printf("Unknown request type: %T", req)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *SyncService) GetSyncStatus(ctx context.Context, req *syncv1.GetSyncStatusRequest) (*syncv1.GetSyncStatusResponse, error) {
 	log.Printf("Getting sync status for session: %s", req.SessionId)
 
-	// Имитация статуса синхронизации
-	statuses := []*syncv1.SyncStatus{
-		{
-			NodeId:            "node_1",
-			SessionId:         req.SessionId,
-			PendingEvents:     0,
-			ProcessingEvents:  0,
-			CompletedEvents:   5,
-			FailedEvents:      0,
-			LastSync:          timestamppb.Now(),
-			AvgProcessingTime: &durationpb.Duration{Seconds: 1},
-			SuccessRate:       1.0,
-			State:             syncv1.SyncState_SYNC_STATE_COMPLETED,
-			StartedAt:         timestamppb.Now(),
-			ElapsedTime:       &durationpb.Duration{Seconds: 10},
-			BytesTransferred:  1024,
-			TransferRateBps:   102.4,
-			ActiveConnections: 1,
-		},
+	// Получаем устройство по session ID
+	device, err := s.deviceManager.GetDevice(req.SessionId)
+	if err != nil {
+		log.Printf("Device not found: %v", err)
+		// Возвращаем статус по умолчанию если устройство не найдено
+		defaultStatus := s.getDefaultSyncStatus(req.SessionId)
+		return &syncv1.GetSyncStatusResponse{
+			Statuses: []*syncv1.SyncStatus{defaultStatus},
+			Summary: &syncv1.SyncSummary{
+				TotalSessions:         1,
+				ActiveSessions:        0,
+				TotalEvents:           0,
+				PendingEvents:         0,
+				FailedEvents:          0,
+				OverallSuccessRate:    0.0,
+				LastActivity:          timestamppb.Now(),
+				TotalBytesTransferred: 0,
+			},
+		}, nil
 	}
 
+	// Получаем реальные данные от устройства
+	status := s.getDeviceStatus(device.DeviceID)
+
 	return &syncv1.GetSyncStatusResponse{
-		Statuses: statuses,
+		Statuses: []*syncv1.SyncStatus{status},
 		Summary: &syncv1.SyncSummary{
 			TotalSessions:         1,
-			ActiveSessions:        0,
-			TotalEvents:           5,
-			PendingEvents:         0,
-			FailedEvents:          0,
-			OverallSuccessRate:    1.0,
-			LastActivity:          timestamppb.Now(),
-			TotalBytesTransferred: 1024,
+			ActiveSessions:        1,
+			TotalEvents:           status.CompletedEvents + status.FailedEvents,
+			PendingEvents:         status.PendingEvents,
+			FailedEvents:          status.FailedEvents,
+			OverallSuccessRate:    status.SuccessRate,
+			LastActivity:          status.LastSync,
+			TotalBytesTransferred: status.BytesTransferred,
 		},
 	}, nil
 }
@@ -222,7 +335,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Регистрируем сервисы
-	syncService := &SyncService{}
+	syncService := NewSyncService()
 	syncv1.RegisterSyncServiceServer(grpcServer, syncService)
 
 	// Включаем reflection для разработки
@@ -272,4 +385,98 @@ func main() {
 	case <-stopped:
 		log.Println("Sync Service stopped gracefully")
 	}
+}
+
+// Вспомогательные методы для работы с устройствами
+
+// getDeviceStatus получает статус устройства
+func (s *SyncService) getDeviceStatus(deviceID string) *syncv1.SyncStatus {
+	device, err := s.deviceManager.GetDevice(deviceID)
+	if err != nil {
+		log.Printf("Error getting device %s: %v", deviceID, err)
+		return s.getDefaultSyncStatus(deviceID)
+	}
+
+	// Получаем файлы, ожидающие синхронизации
+	pendingFiles := device.GetPendingFiles()
+	pendingCount := int32(len(pendingFiles))
+
+	// Получаем статистику по файлам
+	totalFiles := int32(device.GetTotalFiles())
+	completedCount := int32(device.GetCompletedFiles())
+
+	log.Printf("Device %s: total=%d, pending=%d, completed=%d",
+		deviceID, totalFiles, pendingCount, completedCount)
+
+	return &syncv1.SyncStatus{
+		NodeId:            device.DeviceID,
+		SessionId:         device.DeviceID,
+		PendingEvents:     pendingCount,
+		ProcessingEvents:  0,
+		CompletedEvents:   completedCount,
+		FailedEvents:      0,
+		LastSync:          timestamppb.New(device.LastSync),
+		AvgProcessingTime: &durationpb.Duration{Seconds: 1},
+		SuccessRate:       1.0,
+		State:             syncv1.SyncState_SYNC_STATE_CONNECTING,
+		StartedAt:         timestamppb.New(device.LastSync),
+		ElapsedTime:       &durationpb.Duration{Seconds: int64(time.Since(device.LastSync).Seconds())},
+		BytesTransferred:  1024,
+		TransferRateBps:   102.4,
+		ActiveConnections: 1,
+	}
+}
+
+// getDefaultSyncStatus возвращает статус по умолчанию
+func (s *SyncService) getDefaultSyncStatus(sessionID string) *syncv1.SyncStatus {
+	return &syncv1.SyncStatus{
+		NodeId:            "unknown",
+		SessionId:         sessionID,
+		PendingEvents:     0,
+		ProcessingEvents:  0,
+		CompletedEvents:   0,
+		FailedEvents:      0,
+		LastSync:          timestamppb.Now(),
+		AvgProcessingTime: &durationpb.Duration{Seconds: 0},
+		SuccessRate:       0.0,
+		State:             syncv1.SyncState_SYNC_STATE_IDLE,
+		StartedAt:         timestamppb.Now(),
+		ElapsedTime:       &durationpb.Duration{Seconds: 0},
+		BytesTransferred:  0,
+		TransferRateBps:   0.0,
+		ActiveConnections: 0,
+	}
+}
+
+// RegisterDevice регистрирует новое устройство (HTTP/gRPC метод)
+func (s *SyncService) RegisterDevice(ctx context.Context, userID, deviceName, storagePath string) (*storage.DeviceStorage, error) {
+	return s.deviceManager.RegisterDevice(ctx, userID, deviceName, storagePath)
+}
+
+// ListUserDevices возвращает устройства пользователя
+func (s *SyncService) ListUserDevices(userID string) []*storage.DeviceStorage {
+	return s.deviceManager.ListUserDevices(userID)
+}
+
+// SyncDevice синхронизирует конкретное устройство
+func (s *SyncService) SyncDevice(ctx context.Context, deviceID string) error {
+	device, err := s.deviceManager.GetDevice(deviceID)
+	if err != nil {
+		return fmt.Errorf("device not found: %w", err)
+	}
+
+	// Получаем файлы для синхронизации
+	pendingFiles := device.GetPendingFiles()
+	log.Printf("Syncing %d files for device %s", len(pendingFiles), deviceID)
+
+	// Синхронизируем каждый файл
+	for _, file := range pendingFiles {
+		if err := device.SyncFile(ctx, file.FilePath); err != nil {
+			log.Printf("Failed to sync file %s: %v", file.FilePath, err)
+		} else {
+			log.Printf("Successfully synced file: %s", file.FilePath)
+		}
+	}
+
+	return nil
 }
