@@ -3,9 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -75,7 +76,20 @@ type Config struct {
 		MinPoolSize uint64        `json:"minPoolSize" yaml:"minPoolSize"`
 	} `json:"mongodb" yaml:"mongodb"`
 
-	// Другие секции для Kafka, NATS, БД и т.д.
+	Kafka struct {
+		Brokers             []string      `json:"brokers" yaml:"brokers"`
+		GroupID             string        `json:"groupId" yaml:"groupId"`
+		FileEventsTopic     string        `json:"fileEventsTopic" yaml:"fileEventsTopic"`
+		SyncEventsTopic     string        `json:"syncEventsTopic" yaml:"syncEventsTopic"`
+		ConflictEventsTopic string        `json:"conflictEventsTopic" yaml:"conflictEventsTopic"`
+		DLQTopic            string        `json:"dlqTopic" yaml:"dlqTopic"`
+		ProducerTimeout     time.Duration `json:"producerTimeout" yaml:"producerTimeout"`
+		ConsumerTimeout     time.Duration `json:"consumerTimeout" yaml:"consumerTimeout"`
+		MaxRetries          int           `json:"maxRetries" yaml:"maxRetries"`
+		RetryBackoff        time.Duration `json:"retryBackoff" yaml:"retryBackoff"`
+		BatchSize           int           `json:"batchSize" yaml:"batchSize"`
+		BatchTimeout        time.Duration `json:"batchTimeout" yaml:"batchTimeout"`
+	} `json:"kafka" yaml:"kafka"`
 }
 
 func (c *Config) Address() string {
@@ -144,18 +158,86 @@ func Default() *Config {
 	cfg.MongoDB.MaxPoolSize = 10
 	cfg.MongoDB.MinPoolSize = 5
 
+	// Kafka настройки по умолчанию
+	cfg.Kafka.Brokers = []string{"localhost:9092"}
+	cfg.Kafka.GroupID = "syncvault-group"
+	cfg.Kafka.FileEventsTopic = "file.events"
+	cfg.Kafka.SyncEventsTopic = "sync.events"
+	cfg.Kafka.ConflictEventsTopic = "conflict.events"
+	cfg.Kafka.DLQTopic = "dlq.file.events"
+	cfg.Kafka.ProducerTimeout = 10 * time.Second
+	cfg.Kafka.ConsumerTimeout = 10 * time.Second
+	cfg.Kafka.MaxRetries = 3
+	cfg.Kafka.RetryBackoff = 1 * time.Second
+	cfg.Kafka.BatchSize = 100
+	cfg.Kafka.BatchTimeout = 1 * time.Second
+
 	return cfg
 }
 
 func LoadFromFile(filename string) (*Config, error) {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %s: %w", filename, err)
+		// If config file doesn't exist, return default config
+		return Default(), nil
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", filename, err)
+	}
+
+	// Apply defaults for any missing Kafka configuration
+	if len(cfg.Kafka.Brokers) == 0 {
+		// Check environment variable first
+		if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+			cfg.Kafka.Brokers = []string{brokers}
+		} else {
+			cfg.Kafka.Brokers = []string{"localhost:9092"}
+		}
+	}
+	if cfg.Kafka.GroupID == "" {
+		if groupID := os.Getenv("KAFKA_GROUP_ID"); groupID != "" {
+			cfg.Kafka.GroupID = groupID
+		} else {
+			cfg.Kafka.GroupID = "syncvault-group"
+		}
+	}
+	if cfg.Kafka.FileEventsTopic == "" {
+		cfg.Kafka.FileEventsTopic = "file.events"
+	}
+	if cfg.Kafka.SyncEventsTopic == "" {
+		cfg.Kafka.SyncEventsTopic = "sync.events"
+	}
+	if cfg.Kafka.ConflictEventsTopic == "" {
+		cfg.Kafka.ConflictEventsTopic = "conflict.events"
+	}
+	if cfg.Kafka.DLQTopic == "" {
+		cfg.Kafka.DLQTopic = "dlq.file.events"
+	}
+	if cfg.Kafka.ProducerTimeout == 0 {
+		cfg.Kafka.ProducerTimeout = 10 * time.Second
+	}
+	if cfg.Kafka.ConsumerTimeout == 0 {
+		cfg.Kafka.ConsumerTimeout = 10 * time.Second
+	}
+	if cfg.Kafka.MaxRetries == 0 {
+		if retries := os.Getenv("KAFKA_MAX_RETRIES"); retries != "" {
+			if parsed, err := strconv.Atoi(retries); err == nil {
+				cfg.Kafka.MaxRetries = parsed
+			}
+		} else {
+			cfg.Kafka.MaxRetries = 3
+		}
+	}
+	if cfg.Kafka.RetryBackoff == 0 {
+		cfg.Kafka.RetryBackoff = 1 * time.Second
+	}
+	if cfg.Kafka.BatchSize == 0 {
+		cfg.Kafka.BatchSize = 100
+	}
+	if cfg.Kafka.BatchTimeout == 0 {
+		cfg.Kafka.BatchTimeout = 1 * time.Second
 	}
 
 	return &cfg, nil
