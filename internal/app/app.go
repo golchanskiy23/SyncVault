@@ -13,23 +13,40 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 	httpSwagger "github.com/swaggo/http-swagger"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"syncvault/docs"
+	"syncvault/internal/app/handlers"
+	"syncvault/internal/cache"
 	"syncvault/internal/config"
 	"syncvault/internal/db"
+	"syncvault/internal/domain/ports"
+	"syncvault/internal/domain/repositories"
+	"syncvault/internal/domain/services"
+	"syncvault/internal/infrastructure/database"
+	mongoinfra "syncvault/internal/infrastructure/mongodb"
+	"syncvault/internal/infrastructure/storage"
 )
 
 type App struct {
-	httpServer *http.Server
-	router     chi.Router
-	server     *http.Server
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
-	shutdown   bool
-	mu         sync.RWMutex
-	config     *config.Config
-	db         *pgxpool.Pool
+	httpServer    *http.Server
+	router        chi.Router
+	server        *http.Server
+	wg            sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	shutdown      bool
+	mu            sync.RWMutex
+	config        *config.Config
+	db            *pgxpool.Pool
+	mongoDB       *mongo.Database
+	redis         RedisComponents
+	fileRepo      ports.FileRepository
+	fileService   *services.FileService
+	fileHandler   *handlers.FileHandler
+	auditRepo     repositories.SyncAuditRepository
+	auditService  *services.AuditService
+	gridfsStorage ports.Storage
 }
 
 func New(opts ...Option) (*App, error) {
@@ -42,33 +59,87 @@ func New(opts ...Option) (*App, error) {
 		router: chi.NewRouter(),
 	}
 
+	// Apply options
 	for _, opt := range opts {
-		if err := opt(app); err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to apply option: %w", err)
-		}
+		opt(app)
 	}
 
-	// Инициализируем подключение к базе данных для тестов
+	// Initialize database connection
 	if err := app.connectDB(); err != nil {
-		cancel()
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
+
+	// Initialize MongoDB connection
+	if err := app.connectMongoDB(); err != nil {
+		return nil, fmt.Errorf("failed to connect to MongoDB: %w", err)
+	}
+
+	// Set up Hexagonal Architecture dependencies
+	app.setupDependencies()
+
+	// Set up middleware and routes
+	app.setupMiddleware()
+	app.setupRoutes()
 
 	return app, nil
 }
 
+func (a *App) setupDependencies() {
+	// Create repository (Infrastructure layer)
+	baseRepo := database.NewFileRepository(a.db)
+
+	// Wrap with cache if Redis is available
+	if a.redis.Client != nil {
+		a.fileRepo = cache.NewCachedFileRepository(baseRepo, a.redis.FileCache)
+	} else {
+		a.fileRepo = baseRepo
+	}
+
+	// Initialize GridFS storage adapter first
+	a.gridfsStorage = storage.NewGridFSAdapter(a.mongoDB, "syncvault_files")
+
+	// Create service (Domain layer) with GridFS storage
+	a.fileService = services.NewFileService(a.fileRepo, a.gridfsStorage)
+
+	// Create handler (Application layer)
+	a.fileHandler = handlers.NewFileHandler(a.fileService)
+
+	// Initialize audit repository
+	a.auditRepo = mongoinfra.NewSyncAuditRepository(a.mongoDB)
+	a.auditService = services.NewAuditService(a.auditRepo)
+}
+
 // connectDB подключается к базе данных
 func (a *App) connectDB() error {
-	connString := "postgres://postgres:postgres@localhost:5432/syncvault?sslmode=disable"
+	// Формируем строку подключения из конфигурации
+	connString := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		a.config.Database.User,
+		a.config.Database.Password,
+		a.config.Database.Host,
+		a.config.Database.Port,
+		a.config.Database.DBName,
+		a.config.Database.SSLMode,
+	)
 
-	pool, err := pgxpool.New(a.ctx, connString)
+	poolConfig, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return fmt.Errorf("failed to parse database config: %w", err)
+	}
+
+	// Настраиваем пул соединений
+	poolConfig.MaxConns = int32(a.config.Database.MaxOpenConns)
+	poolConfig.MinConns = int32(a.config.Database.MaxIdleConns)
+	poolConfig.HealthCheckPeriod = 1 * time.Minute
+	poolConfig.MaxConnLifetime = a.config.Database.ConnMaxLifetime
+
+	pool, err := pgxpool.NewWithConfig(a.ctx, poolConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
 	a.db = pool
-	log.Println("✓ Connected to database")
+	log.Printf("✓ Connected to database at %s:%d/%s",
+		a.config.Database.Host, a.config.Database.Port, a.config.Database.DBName)
 
 	// Проверяем подключение
 	var result int
@@ -78,6 +149,23 @@ func (a *App) connectDB() error {
 	}
 
 	log.Printf("✓ Database connection verified (result: %d)", result)
+	return nil
+}
+
+// connectMongoDB connects to MongoDB
+func (a *App) connectMongoDB() error {
+	db, err := mongoinfra.NewMongoConnection(a.config)
+	if err != nil {
+		return fmt.Errorf("failed to connect to MongoDB: %w", err)
+	}
+
+	a.mongoDB = db
+	log.Printf("✓ Connected to MongoDB at %s/%s", a.config.MongoDB.URI, a.config.MongoDB.Database)
+
+	// Initialize audit repository
+	a.auditRepo = mongoinfra.NewSyncAuditRepository(db)
+	a.auditService = services.NewAuditService(a.auditRepo)
+
 	return nil
 }
 
@@ -91,8 +179,8 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	a.setupMiddleware()
-	a.setupRoutes()
+	//a.setupMiddleware()
+	//a.setupRoutes()
 
 	if a.httpServer == nil {
 		a.httpServer = &http.Server{
@@ -137,8 +225,8 @@ func (a *App) Run(ctx context.Context) error {
 	log.Printf("   ❤️  Health Check: http://localhost:8080/api/v1/health")
 	log.Printf("   🏓 Ping: http://localhost:8080/api/v1/ping")
 	log.Printf("   📖 Swagger UI: http://localhost:8080/swagger/index.html")
-	log.Printf("   � Swagger UI: http://localhost:8080/swagger-ui")
-	log.Printf("   �📚 Custom Docs: http://localhost:8080/docs")
+	log.Printf("   🔍 Swagger UI: http://localhost:8080/swagger-ui")
+	log.Printf("   📚 Custom Docs: http://localhost:8080/docs")
 	log.Printf("   📄 Swagger JSON: http://localhost:8080/swagger.json")
 
 	<-a.ctx.Done()
@@ -149,29 +237,51 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) Shutdown(ctx context.Context) error {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.shutdown {
-		a.mu.Unlock()
 		return nil
 	}
-	a.shutdown = true
-	a.mu.Unlock()
 
+	a.shutdown = true
 	log.Println("Starting application shutdown...")
 
-	// Отмена контекста для всех горутин
+	// Cancel context to stop all operations
 	a.cancel()
 
-	// Graceful shutdown HTTP сервера
-	if a.httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
+	// Close Redis connection if available
+	if a.redis.Client != nil {
+		if err := a.redis.Client.Close(); err != nil {
+			log.Printf("Error closing Redis connection: %v", err)
+		} else {
+			log.Println("✓ Redis connection closed")
 		}
 	}
 
-	a.wg.Wait()
+	// Close database connection
+	if a.db != nil {
+		a.db.Close()
+		log.Println("✓ Database connection closed")
+	}
+
+	// Close MongoDB connection
+	if a.mongoDB != nil {
+		if err := mongoinfra.CloseMongoConnection(ctx, a.mongoDB); err != nil {
+			log.Printf("Error closing MongoDB connection: %v", err)
+		} else {
+			log.Println("✓ MongoDB connection closed")
+		}
+	}
+
+	// Shutdown HTTP server
+	if a.httpServer != nil {
+		if err := a.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("Error shutting down HTTP server: %v", err)
+		} else {
+			log.Println("✓ HTTP server shut down")
+		}
+	}
+
 	log.Println("Application shutdown completed")
 	return nil
 }
@@ -308,11 +418,11 @@ func (a *App) setupRoutes() {
 		r.Get("/ping", a.handlePing)
 
 		r.Route("/files", func(r chi.Router) {
-			r.Get("/", a.handleListFiles)
-			r.Post("/", a.handleCreateFile)
-			r.Get("/{fileID}", a.handleGetFile)
-			r.Put("/{fileID}", a.handleUpdateFile)
-			r.Delete("/{fileID}", a.handleDeleteFile)
+			r.Get("/", a.fileHandler.ListFiles)
+			r.Post("/", a.fileHandler.CreateFile)
+			r.Get("/{fileID}", a.fileHandler.GetFile)
+			r.Put("/{fileID}", a.handleUpdateFile) // TODO: Update with new handler
+			r.Delete("/{fileID}", a.fileHandler.DeleteFile)
 		})
 
 		r.Route("/sync", func(r chi.Router) {
@@ -743,43 +853,44 @@ func (a *App) setupSwaggerRoutes() {
 
 /*
 func (a *App) startBackgroundServices() {
-a.wg.Add(1)
-go func() {
-defer a.wg.Done()
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
 
-ticker := time.NewTicker(30 * time.Second)
-defer ticker.Stop()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
 
-for {
-select {
-case <-a.ctx.Done():
-log.Println("Background service: context cancelled, stopping...")
-return
-case <-ticker.C:
-log.Println("Background service: performing periodic task")
-}
-}
-}()
+		for {
+			select {
+			case <-a.ctx.Done():
+				log.Println("Background service: context cancelled, stopping...")
+				return
+			case <-ticker.C:
+				log.Println("Background service: performing periodic task")
+			}
+		}
+	}()
 
-log.Println("Background services started")
+	log.Println("Background services started")
 }
 
 func (a *App) shutdownBackgroundServices(ctx context.Context) {
-log.Println("Shutting down background services...")
+	log.Println("Shutting down background services...")
 
-shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-defer cancel()
+	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
-done := make(chan struct{})
-go func() {
-time.Sleep(2 * time.Second)
-close(done)
-}()
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(2 * time.Second)
+		close(done)
+	}()
 
-select {
-case <-done:
-log.Println("Background services shutdown completed")
-case <-shutdownCtx.Done():
-log.Println("Background services shutdown timeout")
+	select {
+	case <-done:
+		log.Println("Background services shutdown completed")
+	case <-shutdownCtx.Done():
+		log.Println("Background services shutdown timeout")
+	}
 }
-}*/
+*/

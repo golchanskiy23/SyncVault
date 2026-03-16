@@ -1,0 +1,119 @@
+# Redis Testing Makefile
+
+.PHONY: test-redis test-cache test-ratelimit test-lock test-session clean docker-redis
+
+# Запустить все Redis тесты
+test-redis:
+	@echo "🚀 Running all Redis integration tests..."
+	go run cmd/redis-test/main.go
+
+# Запустить только тест кэша
+test-cache:
+	@echo "📦 Testing cache middleware..."
+	go test ./internal/cache/... -v
+
+# Запустить только тест rate limiter
+test-ratelimit:
+	@echo "🚦 Testing rate limiter..."
+	go test ./internal/ratelimit/... -v
+
+# Запустить только тест distributed lock
+test-lock:
+	@echo "🔒 Testing distributed lock..."
+	go test ./internal/lock/... -v
+
+# Запустить только тест session store
+test-session:
+	@echo "👤 Testing session store..."
+	go test ./internal/session/... -v
+
+# Запустить все unit тесты
+test-unit:
+	@echo "🧪 Running all unit tests..."
+	go test ./internal/... -v
+
+# Запустить Redis в Docker для тестов
+docker-redis:
+	@echo "🐳 Starting Redis for testing..."
+	docker run -d --name syncvault-redis-test -p 6379:6379 redis:7-alpine
+
+# Остановить и удалить Redis контейнер
+clean:
+	@echo "🧹 Cleaning up..."
+	docker stop syncvault-redis-test || true
+	docker rm syncvault-redis-test || true
+	go clean -testcache
+
+# Проверить зависимости
+deps:
+	@echo "📦 Installing dependencies..."
+	go mod download
+	go mod tidy
+
+# Проверить код
+lint:
+	@echo "🔍 Running linters..."
+	golangci-lint run ./...
+
+# Сборка
+build:
+	@echo "🔨 Building..."
+	go build ./...
+
+# Запустить все тесты (unit + integration)
+test-all: docker-redis
+	@sleep 2
+	$(MAKE) test-unit
+	$(MAKE) test-redis
+	$(MAKE) clean
+
+# Профилирование Redis
+profile-redis:
+	@echo "📊 Redis profiling..."
+	redis-cli --latency-history
+	redis-cli --latency-doctor
+
+# Мониторинг Redis в реальном времени
+monitor-redis:
+	@echo "📈 Monitoring Redis..."
+	redis-cli MONITOR
+
+# Проверить состояние Redis
+status-redis:
+	@echo "🏥 Redis status..."
+	redis-cli INFO
+	redis-cli INFO memory
+	redis-cli INFO stats
+
+# Очистить Redis
+flush-redis:
+	@echo "🗑️ Flushing Redis..."
+	redis-cli FLUSHALL
+	redis-cli FLUSHDB
+
+# Запустить с настройками для разработки
+dev:
+	@echo "🛠️ Development mode with Redis..."
+	REDIS_HOST=localhost REDIS_PORT=6379 go run cmd/server/main.go
+
+# Помощь
+help:
+	@echo "Available targets:"
+	@echo "  test-redis      - Run Redis integration tests"
+	@echo "  test-cache      - Run cache tests only"
+	@echo "  test-ratelimit  - Run rate limiter tests only"
+	@echo "  test-lock       - Run distributed lock tests only"
+	@echo "  test-session    - Run session store tests only"
+	@echo "  test-unit       - Run all unit tests"
+	@echo "  docker-redis   - Start Redis in Docker"
+	@echo "  clean          - Clean up containers and cache"
+	@echo "  deps           - Install dependencies"
+	@echo "  lint           - Run linters"
+	@echo "  build          - Build the project"
+	@echo "  test-all       - Run all tests with Redis"
+	@echo "  profile-redis  - Redis profiling"
+	@echo "  monitor-redis  - Monitor Redis commands"
+	@echo "  status-redis   - Show Redis status"
+	@echo "  flush-redis    - Flush all Redis data"
+	@echo "  dev            - Run in development mode"
+	@echo "  help           - Show this help"

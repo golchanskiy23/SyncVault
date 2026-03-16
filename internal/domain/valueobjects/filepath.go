@@ -1,6 +1,7 @@
 package valueobjects
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -67,4 +68,17 @@ func (f FilePath) RelativeTo(base FilePath) (string, error) {
 		return "", fmt.Errorf("cannot get relative path: %w", err)
 	}
 	return rel, nil
+}
+
+func (f *FilePath) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + f.value + `"`), nil
+}
+
+func (f *FilePath) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	f.value = s
+	return nil
 }
