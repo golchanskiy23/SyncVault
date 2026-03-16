@@ -17,6 +17,13 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 )
 
+// Local proto packages
+replace syncvault/internal/grpc/proto/common => ./internal/grpc/proto/common
+replace syncvault/internal/grpc/proto/storage => ./internal/grpc/proto/storage
+replace syncvault/internal/grpc/proto/sync => ./internal/grpc/proto/sync
+replace syncvault/internal/grpc/proto/notification => ./internal/grpc/proto/notification
+replace syncvault/internal/grpc/proto/health => ./internal/grpc/proto/health
+
 require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

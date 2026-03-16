@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package syncvault.v1.notification;
 
-option go_package = "syncvault/internal/grpc/proto/notification/v1;notificationv1";
+option go_package = "syncvault/internal/grpc/proto/notification;notificationv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
