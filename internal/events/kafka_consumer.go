@@ -22,8 +22,9 @@ type SyncEventHandler func(ctx context.Context, event *SyncEvent) error
 type ConflictEventHandler func(ctx context.Context, event *ConflictEvent) error
 
 type KafkaConsumer struct {
-	reader *kafka.Reader
-	config *KafkaConfig
+	reader      *kafka.Reader
+	config      *KafkaConfig
+	dlqProducer *KafkaProducer
 }
 
 func NewKafkaConsumer(config *KafkaConfig, topic string) *KafkaConsumer {
@@ -41,8 +42,9 @@ func NewKafkaConsumer(config *KafkaConfig, topic string) *KafkaConsumer {
 	})
 
 	return &KafkaConsumer{
-		reader: reader,
-		config: config,
+		reader:      reader,
+		config:      config,
+		dlqProducer: NewKafkaProducer(config),
 	}
 }
 
@@ -88,15 +90,11 @@ func (c *KafkaConsumer) consume(ctx context.Context, handler interface{}, proces
 				RetryCount:    0,
 			}
 
-			producer := NewKafkaProducer(c.config)
-			defer producer.Close()
-
-			ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
-			defer cancel()
-
-			if pubErr := producer.PublishDLQEvent(ctx, dlqEvent); pubErr != nil {
+			dlqCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+			if pubErr := c.dlqProducer.PublishDLQEvent(dlqCtx, dlqEvent); pubErr != nil {
 				log.Printf("Failed to publish to DLQ: %v", pubErr)
 			}
+			cancel()
 		}
 
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
@@ -142,5 +140,8 @@ func (c *KafkaConsumer) handleConflictEvent(ctx context.Context, handler interfa
 }
 
 func (c *KafkaConsumer) Close() error {
+	if err := c.dlqProducer.Close(); err != nil {
+		log.Printf("Error closing DLQ producer: %v", err)
+	}
 	return c.reader.Close()
 }

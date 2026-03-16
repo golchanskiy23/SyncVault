@@ -21,7 +21,7 @@ const (
 )
 
 type SyncEvent struct {
-	id          valueobjects.FileID
+	id          valueobjects.SyncEventID
 	eventType   EventType
 	nodeID      valueobjects.StorageNodeID
 	filePath    valueobjects.FilePath
@@ -38,7 +38,7 @@ func NewSyncEvent(
 	description string,
 ) *SyncEvent {
 	return &SyncEvent{
-		id:          valueobjects.NewFileID(),
+		id:          valueobjects.NewSyncEventID(),
 		eventType:   eventType,
 		nodeID:      nodeID,
 		filePath:    filePath,
@@ -48,7 +48,7 @@ func NewSyncEvent(
 	}
 }
 
-func (e *SyncEvent) ID() valueobjects.FileID {
+func (e *SyncEvent) ID() valueobjects.SyncEventID {
 	return e.id
 }
 

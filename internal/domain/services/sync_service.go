@@ -129,7 +129,7 @@ func (s *SyncDomainService) analyzeFileConflict(
 	if targetFile.Status() == entities.FileStatusDeleted &&
 		sourceFile.Status() == entities.FileStatusModified {
 		return entities.NewConflict(
-			valueobjects.FileID{},
+			fileID,
 			sourceNode,
 			targetNode,
 			entities.ConflictTypeDeletion,

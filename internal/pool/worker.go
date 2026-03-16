@@ -2,9 +2,13 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 )
+
+// ErrPoolStopped возвращается при попытке отправить задачу в остановленный пул
+var ErrPoolStopped = errors.New("worker pool is stopped")
 
 type Task interface {
 	Execute(ctx context.Context) error
@@ -31,8 +35,9 @@ type WorkerPool struct {
 	taskCount  int64
 	errorCount int64
 	activeJobs int32
-	mu         sync.RWMutex // Защита от race conditions
-	stopped    int32        // Атомарный флаг остановки
+	mu         sync.RWMutex
+	stopped    int32
+	stopOnce   sync.Once // гарантирует однократное закрытие канала
 }
 
 func NewWorkerPool(ctx context.Context, workers, queueSize int) *WorkerPool {
@@ -82,7 +87,7 @@ func (p *WorkerPool) worker(id int) {
 // Submit добавляет задачу в очередь
 func (p *WorkerPool) Submit(task Task) error {
 	if atomic.LoadInt32(&p.stopped) != 0 {
-		return context.Canceled
+		return ErrPoolStopped
 	}
 
 	select {
@@ -99,13 +104,12 @@ func (p *WorkerPool) SubmitFunc(fn func(ctx context.Context) error) error {
 
 // Stop останавливает пул воркеров
 func (p *WorkerPool) Stop() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	atomic.StoreInt32(&p.stopped, 1) // Устанавливаем флаг остановки
-	p.cancel()
-	close(p.taskQueue)
-	p.wg.Wait()
+	p.stopOnce.Do(func() {
+		atomic.StoreInt32(&p.stopped, 1)
+		p.cancel()
+		p.wg.Wait()
+		close(p.taskQueue)
+	})
 }
 
 func (p *WorkerPool) Stats() PoolStats {
