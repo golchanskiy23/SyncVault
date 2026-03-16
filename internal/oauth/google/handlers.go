@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"syncvault/internal/auth"
 	"syncvault/internal/config"
@@ -37,11 +38,15 @@ func NewOAuthHandlers(db *pgxpool.Pool, config *config.GoogleDriveConfig, jwtSer
 
 // AuthRequest обрабатывает запрос на авторизацию
 func (h *OAuthHandlers) AuthRequest(w http.ResponseWriter, r *http.Request) {
-	// Получаем пользователя из JWT токена
+	// Получаем пользователя из JWT токена или query параметра
 	userID, ok := auth.GetUserIDFromContext(r.Context())
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
+		// Fallback: принимаем user_id из query для начала OAuth flow
+		userID = r.URL.Query().Get("user_id")
+		if userID == "" {
+			http.Error(w, "Unauthorized: provide JWT or user_id query param", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Генерируем auth URL
@@ -59,7 +64,7 @@ func (h *OAuthHandlers) AuthRequest(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   600, // 10 минут
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false, // localhost — без HTTPS
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -69,7 +74,7 @@ func (h *OAuthHandlers) AuthRequest(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   600, // 10 минут
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false, // localhost — без HTTPS
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -145,7 +150,7 @@ func (h *OAuthHandlers) AuthCallback(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -155,7 +160,7 @@ func (h *OAuthHandlers) AuthCallback(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -341,6 +346,129 @@ func (h *OAuthHandlers) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(folder)
 }
 
+// syncDownloadRecursive рекурсивно скачивает папку с Drive
+func (h *OAuthHandlers) syncDownloadRecursive(ctx context.Context, userID, folderID, localPath string) {
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		log.Printf("SyncDownload: failed to create dir %s: %v", localPath, err)
+		return
+	}
+
+	result, err := h.driveAdapter.ListFiles(ctx, userID, folderID, 1000)
+	if err != nil {
+		log.Printf("SyncDownload: failed to list folder %s: %v", folderID, err)
+		return
+	}
+
+	for _, file := range result.Files {
+		if file.MimeType == "application/vnd.google-apps.folder" {
+			// Рекурсивно обходим подпапку
+			h.syncDownloadRecursive(ctx, userID, file.ID, localPath+"/"+file.Name)
+		} else {
+			dest := localPath + "/" + file.Name
+			if err := h.driveAdapter.DownloadFile(ctx, userID, file.ID, dest); err != nil {
+				log.Printf("SyncDownload: failed to download %s: %v", file.Name, err)
+			} else {
+				log.Printf("SyncDownload: ✓ %s → %s", file.Name, dest)
+			}
+		}
+	}
+}
+
+// SyncDownload скачивает папку с Google Drive на локальный путь (рекурсивно)
+func (h *OAuthHandlers) SyncDownload(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		FolderID  string `json:"folder_id"`
+		LocalPath string `json:"local_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FolderID == "" || req.LocalPath == "" {
+		http.Error(w, "folder_id and local_path are required", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		h.syncDownloadRecursive(ctx, userID, req.FolderID, req.LocalPath)
+		log.Printf("SyncDownload: completed %s → %s", req.FolderID, req.LocalPath)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":    "Download sync started",
+		"folder_id":  req.FolderID,
+		"local_path": req.LocalPath,
+		"status":     "in_progress",
+	})
+}
+
+// syncUploadRecursive рекурсивно загружает локальную папку на Drive
+func (h *OAuthHandlers) syncUploadRecursive(ctx context.Context, userID, localPath, folderID string) {
+	entries, err := os.ReadDir(localPath)
+	if err != nil {
+		log.Printf("SyncUpload: failed to read dir %s: %v", localPath, err)
+		return
+	}
+
+	for _, entry := range entries {
+		fullPath := localPath + "/" + entry.Name()
+		if entry.IsDir() {
+			// Создаём папку на Drive и рекурсируем
+			subFolder, err := h.driveAdapter.CreateFolder(ctx, userID, entry.Name(), folderID)
+			if err != nil {
+				log.Printf("SyncUpload: failed to create folder %s: %v", entry.Name(), err)
+				continue
+			}
+			h.syncUploadRecursive(ctx, userID, fullPath, subFolder.ID)
+		} else {
+			uploaded, err := h.driveAdapter.UploadFile(ctx, userID, fullPath, folderID)
+			if err != nil {
+				log.Printf("SyncUpload: failed to upload %s: %v", entry.Name(), err)
+			} else {
+				log.Printf("SyncUpload: ✓ %s → %s", entry.Name(), uploaded.WebViewLink)
+			}
+		}
+	}
+}
+
+// SyncUpload загружает локальную папку на Google Drive (рекурсивно)
+func (h *OAuthHandlers) SyncUpload(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		LocalPath string `json:"local_path"`
+		FolderID  string `json:"folder_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LocalPath == "" || req.FolderID == "" {
+		http.Error(w, "local_path and folder_id are required", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		h.syncUploadRecursive(ctx, userID, req.LocalPath, req.FolderID)
+		log.Printf("SyncUpload: completed %s → %s", req.LocalPath, req.FolderID)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":    "Upload sync started",
+		"local_path": req.LocalPath,
+		"folder_id":  req.FolderID,
+		"status":     "in_progress",
+	})
+}
+
 // SyncFiles обрабатывает запрос на синхронизацию файлов
 func (h *OAuthHandlers) SyncFiles(w http.ResponseWriter, r *http.Request) {
 	// Получаем пользователя из JWT токена
@@ -484,9 +612,25 @@ func (h *OAuthHandlers) RegisterRoutes(router chi.Router) {
 		// Синхронизация
 		r.Post("/drive/sync", h.SyncFiles)
 		r.Get("/drive/sync/status", h.GetSyncStatus)
+		r.Post("/drive/sync/download", h.SyncDownload)
+		r.Post("/drive/sync/upload", h.SyncUpload)
 
 		// Управление аккаунтом
 		r.Post("/drive/disconnect", h.Disconnect)
+	})
+
+	// Success page после OAuth
+	router.Get("/auth/success", func(w http.ResponseWriter, r *http.Request) {
+		provider := r.URL.Query().Get("provider")
+		userID := r.URL.Query().Get("user_id")
+		response := map[string]interface{}{
+			"message":  "OAuth authorization successful",
+			"provider": provider,
+			"user_id":  userID,
+			"status":   "connected",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
 	})
 
 	// Health check для OAuth сервиса
