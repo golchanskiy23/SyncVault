@@ -5,6 +5,7 @@ package syncvault.v1.storage;
 option go_package = "syncvault/internal/grpc/proto/storage/v1;storagev1";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 import "common/types.proto";
 

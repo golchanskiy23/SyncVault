@@ -72,11 +72,6 @@ validate-proto:
 	done
 	@echo "✅ All proto files are valid"
 
-docs: proto
-	@echo "📚 Generating documentation..."
-	@mkdir -p $(DOCS_DIR)
-	@echo "📄 API documentation generated in $(DOCS_DIR)"
-
 # Генерация по отдельным пакетам
 proto-common: install-tools
 	@echo "🔧 Generating common proto files..."
