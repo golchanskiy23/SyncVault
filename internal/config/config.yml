@@ -7,3 +7,50 @@ http:
 
 shutdown:
   timeout: 30s
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: ""
+  dbname: syncvault
+  sslmode: disable
+  maxOpenConns: 25
+  maxIdleConns: 5
+  connMaxLifetime: 5m
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  poolSize: 10
+  minIdleConns: 5
+  maxRetries: 3
+  dialTimeout: 5s
+  readTimeout: 3s
+  writeTimeout: 3s
+  poolTimeout: 4s
+
+cache:
+  fileMetadataTTL: 5m
+
+session:
+  tokenExpiry: 24h
+  maxSessions: 5
+
+rateLimit:
+  requestsPerMinute: 60
+  requestsPerHour: 1000
+
+lock:
+  defaultTTL: 30s
+  retryCount: 3
+  retryDelay: 100ms
+
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "syncvault_audit"
+  timeout: 10s
+  maxPoolSize: 10
+  minPoolSize: 5

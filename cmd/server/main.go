@@ -19,7 +19,10 @@ func main() {
 		log.Fatalf("Failed to load config.yml: %v", err)
 	}
 
-	application, err := app.New(app.WithConfig(cfg))
+	application, err := app.New(
+		app.WithConfig(cfg),
+		app.WithRedis(cfg),
+	)
 	if err != nil {
 		log.Fatalf("Failed to create application: %v", err)
 	}
