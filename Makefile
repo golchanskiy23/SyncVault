@@ -166,6 +166,9 @@ generate-docs:
 dev: fmt lint test-unit build run
 	@echo "🔄 Full development cycle completed"
 
+# Микросервисы
+include Makefile.microservices
+
 # CI/CD пайплайн
 ci: deps lint test-unit test-integration build security
 	@echo "🚀 CI pipeline completed"
