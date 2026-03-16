@@ -10,6 +10,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// GoogleDriveConfig содержит конфигурацию Google Drive
+type GoogleDriveConfig struct {
+	OAuth       *GoogleOAuthConfig `yaml:"oauth" json:"oauth"`
+	APIBaseURL  string             `yaml:"api_base_url" json:"api_base_url"`
+	UploadURL   string             `yaml:"upload_url" json:"upload_url"`
+	MaxFileSize int64              `yaml:"max_file_size" json:"max_file_size"`
+	ChunkSize   int                `yaml:"chunk_size" json:"chunk_size"`
+	RetryCount  int                `yaml:"retry_count" json:"retry_count"`
+	RetryDelay  time.Duration      `yaml:"retry_delay" json:"retry_delay"`
+}
+
+// GoogleOAuthConfig содержит конфигурацию Google OAuth
+type GoogleOAuthConfig struct {
+	ClientID     string   `yaml:"client_id" json:"client_id"`
+	ClientSecret string   `yaml:"client_secret" json:"client_secret"`
+	RedirectURL  string   `yaml:"redirect_url" json:"redirect_url"`
+	Scopes       []string `yaml:"scopes" json:"scopes"`
+}
+
 type Config struct {
 	HTTP struct {
 		Host         string        `json:"host" yaml:"host"`
@@ -100,6 +119,10 @@ type Config struct {
 		RefreshTTL    time.Duration `json:"refreshTTL" yaml:"refreshTTL"`
 		Issuer        string        `json:"issuer" yaml:"issuer"`
 	} `json:"jwt" yaml:"jwt"`
+
+	OAuth struct {
+		GoogleDrive *GoogleDriveConfig `json:"google_drive" yaml:"google_drive"`
+	} `json:"oauth" yaml:"oauth"`
 }
 
 func (c *Config) Address() string {
