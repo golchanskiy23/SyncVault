@@ -165,12 +165,11 @@ func (g *GridFSAdapter) ListDir(ctx context.Context, path valueobjects.FilePath)
 	for cursor.Next(ctx) {
 		var fileDoc gridfsFile
 		if err := cursor.Decode(&fileDoc); err != nil {
+			log.Printf("Error decoding file document: %v", err)
 			continue
 		}
-		fp, err := valueobjects.NewFilePath(fileDoc.Name)
-		if err != nil {
-			continue
-		}
+		fp := valueobjects.FilePathFromString(fileDoc.Name)
+
 		files = append(files, ports.FileInfo{
 			Path:       fp,
 			Size:       fileDoc.Length,
