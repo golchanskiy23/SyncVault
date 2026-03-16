@@ -15,11 +15,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	authv1 "syncvault/internal/grpc/proto/auth"
+	"syncvault/internal/storage"
 )
 
 // AuthService микросервис для аутентификации и авторизации
 type AuthService struct {
 	authv1.UnimplementedAuthServiceServer
+	deviceManager *storage.DeviceManager
+}
+
+func NewAuthService() *AuthService {
+	return &AuthService{
+		deviceManager: storage.NewDeviceManager(nil), // Здесь будет конфиг
+	}
 }
 
 func (s *AuthService) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {
@@ -184,7 +192,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Регистрируем сервисы
-	authService := &AuthService{}
+	authService := NewAuthService()
 	authv1.RegisterAuthServiceServer(grpcServer, authService)
 
 	// Включаем reflection для разработки
@@ -234,4 +242,60 @@ func main() {
 	case <-stopped:
 		log.Println("Auth Service stopped gracefully")
 	}
+}
+
+// Методы для работы с устройствами пользователя
+
+// RegisterDevice регистрирует новое устройство для пользователя
+func (s *AuthService) RegisterDevice(ctx context.Context, userID, deviceName, deviceType string) (*storage.DeviceStorage, error) {
+	log.Printf("Registering device %s for user %s", deviceName, userID)
+
+	// Создаем уникальный путь для устройства
+	storagePath := fmt.Sprintf("/tmp/syncvault_%s_%s", userID, deviceName)
+
+	// Регистрируем устройство через Device Manager
+	device, err := s.deviceManager.RegisterDevice(ctx, userID, deviceName, storagePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register device: %w", err)
+	}
+
+	log.Printf("Device registered successfully: %s", device.DeviceID)
+	return device, nil
+}
+
+// GetUserDevices возвращает все устройства пользователя
+func (s *AuthService) GetUserDevices(userID string) []*storage.DeviceStorage {
+	log.Printf("Getting devices for user: %s", userID)
+
+	devices := s.deviceManager.ListUserDevices(userID)
+	log.Printf("Found %d devices for user %s", len(devices), userID)
+
+	return devices
+}
+
+// RevokeDevice отзывает доступ устройства
+func (s *AuthService) RevokeDevice(ctx context.Context, userID, deviceID string) error {
+	log.Printf("Revoking device access: %s for user %s", deviceID, userID)
+
+	// Здесь должна быть логика отзыва устройства
+	// Например, удаление из Device Manager или изменение статуса
+
+	return nil
+}
+
+// GetDeviceStatus получает статус устройства
+func (s *AuthService) GetDeviceStatus(ctx context.Context, userID, deviceID string) (*storage.DeviceStorage, error) {
+	log.Printf("Getting device status: %s for user %s", deviceID, userID)
+
+	device, err := s.deviceManager.GetDevice(deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("device not found: %w", err)
+	}
+
+	// Проверяем, что устройство принадлежит пользователю
+	if device.UserID != userID {
+		return nil, fmt.Errorf("access denied: device does not belong to user")
+	}
+
+	return device, nil
 }

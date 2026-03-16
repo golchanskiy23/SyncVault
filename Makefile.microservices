@@ -3,7 +3,7 @@
 .PHONY: deps-start deps-stop services-start services-stop dev-start dev-stop build-services logs status clean
 
 # Переменные
-SERVICES = auth-service storage-service file-service sync-service notification-service
+SERVICES = auth-service storage-service file-service sync-service notification-service api-gateway
 SERVICE_PORTS = 50056 50054 50052 50053 50055
 
 # Запуск зависимостей (базы данных)
@@ -29,6 +29,19 @@ services-start:
 	done
 	@echo "✅ All services started"
 	@echo "📊 Services running on ports: $(SERVICE_PORTS)"
+
+# Запуск API Gateway
+run-gateway:
+	@echo "🌐 Starting API Gateway..."
+	cd cmd/api-gateway && go run main.go
+
+# Запуск API Gateway с микросервисами
+dev-start-gateway:
+	@echo "🎯 Starting development environment with API Gateway..."
+	$(MAKE) deps-start
+	$(MAKE) services-start &
+	sleep 5
+	$(MAKE) run-gateway
 
 # Остановка всех микросервисов
 services-stop:
