@@ -8,7 +8,6 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 import "common/types.proto";
-import "storage/storage.proto";
 
 // NotificationService управляет уведомлениями и событиями
 service NotificationService {
@@ -197,8 +196,8 @@ message NotificationSummary {
   int32 total_count = 1;
   int32 unread_count = 2;
   int32 expired_count = 3;
-  map<NotificationType, int32> count_by_type = 4;
-  map<NotificationPriority, int32> count_by_priority = 5;
+  map<string, int32> count_by_type = 4;
+  map<string, int32> count_by_priority = 5;
   google.protobuf.Timestamp oldest_notification = 6;
   google.protobuf.Timestamp newest_notification = 7;
 }
@@ -261,8 +260,8 @@ message NotificationSettings {
   string user_id = 1;
   string node_id = 2;
   bool enabled = 3;
-  map<NotificationType, bool> type_settings = 4;
-  map<NotificationPriority, bool> priority_settings = 5;
+  map<string, bool> type_settings = 4;
+  map<string, bool> priority_settings = 5;
   map<string, ChannelSettings> channel_settings = 6;
   google.protobuf.Duration quiet_hours_start = 7;
   google.protobuf.Duration quiet_hours_end = 8;
@@ -280,8 +279,8 @@ message NotificationSettings {
 // ChannelSettings представляет настройки канала
 message ChannelSettings {
   bool enabled = 1;
-  map<NotificationType, bool> type_settings = 2;
-  map<NotificationPriority, bool> priority_settings = 3;
+  map<string, bool> type_settings = 2;
+  map<string, bool> priority_settings = 3;
   int32 max_frequency = 4;
   google.protobuf.Duration quiet_hours_start = 5;
   google.protobuf.Duration quiet_hours_end = 6;

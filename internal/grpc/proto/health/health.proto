@@ -6,6 +6,7 @@ option go_package = "syncvault/internal/grpc/proto/health/v1;healthv1";
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 // HealthService предоставляет стандартные health check endpoints
 // Совместим с grpc.health.v1 Health Checking Protocol
@@ -310,7 +311,7 @@ message EnvironmentInfo {
   repeated string arguments = 2;
   string working_directory = 3;
   string executable_path = 4;
-  map<string, string) configuration = 5;
+  map<string, string> configuration = 5;
 }
 
 // LiveResponse ответ для liveness probe
