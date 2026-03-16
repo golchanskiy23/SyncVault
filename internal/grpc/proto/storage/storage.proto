@@ -1,0 +1,332 @@
+syntax = "proto3";
+
+package syncvault.v1.storage;
+
+option go_package = "syncvault/internal/grpc/proto/storage;storagev1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "common/types.proto";
+
+// StorageService управляет хранением файлов и метаданных
+service StorageService {
+  // Хранение файла
+  rpc StoreFile(StoreFileRequest) returns (StoreFileResponse);
+  
+  // Получение файла
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+  
+  // Удаление файла
+  rpc DeleteFile(DeleteFileRequest) returns (google.protobuf.Empty);
+  
+  // Проверка существования файла
+  rpc FileExists(FileExistsRequest) returns (FileExistsResponse);
+  
+  // Создание директории
+  rpc CreateDirectory(CreateDirectoryRequest) returns (google.protobuf.Empty);
+  
+  // Получение списка файлов
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  
+  // Получение информации о файле
+  rpc GetFileInfo(GetFileInfoRequest) returns (GetFileInfoResponse);
+  
+  // Получение информации о пространстве
+  rpc GetSpaceInfo(GetSpaceInfoRequest) returns (GetSpaceInfoResponse);
+  
+  // Подключение к хранилищу
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+  
+  // Отключение от хранилища
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+  
+  // Проверка состояния подключения
+  rpc IsConnected(IsConnectedRequest) returns (IsConnectedResponse);
+}
+
+// FileMetadata представляет метаданные файла
+message FileMetadata {
+  string file_id = 1;
+  string file_path = 2;
+  string file_hash = 3;
+  int64 file_size = 4;
+  common.FileStatus status = 5;
+  string storage_node_id = 6;
+  int64 user_id = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp modified_at = 9;
+  google.protobuf.Timestamp synced_at = 10;
+  int64 version = 11;
+  string mime_type = 12;
+  map<string, string> tags = 13;
+  string checksum = 14;
+  int32 chunk_count = 15;
+}
+
+// StorageNode представляет узел хранения
+message StorageNode {
+  string node_id = 1;
+  string name = 2;
+  string address = 3;
+  int32 port = 4;
+  StorageNodeType type = 5;
+  StorageNodeStatus status = 6;
+  google.protobuf.Timestamp last_seen = 7;
+  common.SpaceInfo space_info = 8;
+  map<string, string> capabilities = 9;
+  string version = 10;
+}
+
+// StorageNodeType представляет тип узла хранения
+enum StorageNodeType {
+  STORAGE_NODE_TYPE_UNSPECIFIED = 0;
+  STORAGE_NODE_TYPE_PRIMARY = 1;
+  STORAGE_NODE_TYPE_SECONDARY = 2;
+  STORAGE_NODE_TYPE_CACHE = 3;
+  STORAGE_NODE_TYPE_BACKUP = 4;
+}
+
+// StorageNodeStatus представляет статус узла хранения
+enum StorageNodeStatus {
+  STORAGE_NODE_STATUS_UNSPECIFIED = 0;
+  STORAGE_NODE_STATUS_ONLINE = 1;
+  STORAGE_NODE_STATUS_OFFLINE = 2;
+  STORAGE_NODE_STATUS_MAINTENANCE = 3;
+  STORAGE_NODE_STATUS_ERROR = 4;
+  STORAGE_NODE_STATUS_SYNCING = 5;
+}
+
+// SyncRequest представляет запрос синхронизации
+message SyncRequest {
+  oneof request {
+    SyncStart start = 1;
+    SyncAck ack = 2;
+    SyncComplete complete = 3;
+    SyncError error = 4;
+    SyncPing ping = 5;
+  }
+}
+
+// SyncStart начинает синхронизацию
+message SyncStart {
+  string node_id = 1;
+  common.NodeID target_node = 2;
+  google.protobuf.Timestamp since = 3;
+  repeated string file_ids = 4;
+  common.Priority priority = 5;
+  bool force_full_sync = 6;
+  map<string, string> options = 7;
+}
+
+// SyncAck подтверждает получение события
+message SyncAck {
+  string event_id = 1;
+  bool success = 2;
+  string error_message = 3;
+  google.protobuf.Timestamp processed_at = 4;
+}
+
+// SyncComplete завершает синхронизацию
+message SyncComplete {
+  string node_id = 1;
+  int32 events_processed = 2;
+  int32 events_failed = 3;
+  google.protobuf.Duration duration = 4;
+  int64 bytes_transferred = 5;
+  repeated string failed_file_ids = 6;
+}
+
+// SyncError сообщает об ошибке синхронизации
+message SyncError {
+  string event_id = 1;
+  string error_code = 2;
+  string error_message = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  map<string, string> context = 5;
+}
+
+// SyncPing проверяет соединение
+message SyncPing {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int32 sequence_number = 3;
+}
+
+// SyncResponse представляет ответ синхронизации
+message SyncResponse {
+  oneof response {
+    SyncEvent event = 1;
+    SyncStatus status = 2;
+    SyncPong pong = 3;
+    SyncComplete complete = 4;
+  }
+}
+
+// SyncEvent представляет событие синхронизации
+message SyncEvent {
+  string event_id = 1;
+  common.SyncEventType type = 2;
+  string source_node_id = 3;
+  string target_node_id = 4;
+  FileMetadata file_metadata = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  common.Priority priority = 7;
+  map<string, string> metadata = 8;
+  int32 retry_count = 9;
+}
+
+// SyncStatus представляет статус синхронизации
+message SyncStatus {
+  string node_id = 1;
+  int32 pending_events = 2;
+  int32 processing_events = 3;
+  int32 completed_events = 4;
+  int32 failed_events = 5;
+  google.protobuf.Timestamp last_sync = 6;
+  google.protobuf.Duration avg_processing_time = 7;
+  float success_rate = 8;
+}
+
+// SyncPong ответ на ping
+message SyncPong {
+  string node_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  int32 sequence_number = 3;
+  SyncStatus status = 4;
+}
+
+// StoreFileRequest запрос на хранение файла
+message StoreFileRequest {
+  string file_path = 1;
+  bytes content = 2;
+  int64 size = 3;
+  string storage_node_id = 4;
+  int64 user_id = 5;
+  string mime_type = 6;
+  map<string, string> metadata = 7;
+  common.Priority priority = 8;
+}
+
+// StoreFileResponse ответ на хранение файла
+message StoreFileResponse {
+  string file_id = 1;
+  string file_hash = 2;
+  google.protobuf.Timestamp created_at = 3;
+  int64 size = 4;
+  string storage_node_id = 5;
+}
+
+// GetFileRequest запрос на получение файла
+message GetFileRequest {
+  string file_path = 1;
+  bool include_content = 2;
+  int64 offset = 3;
+  int64 limit = 4;
+}
+
+// GetFileResponse ответ с файлом
+message GetFileResponse {
+  FileMetadata metadata = 1;
+  bytes content = 2;
+  int64 total_size = 3;
+  bool has_more = 4;
+}
+
+// DeleteFileRequest запрос на удаление файла
+message DeleteFileRequest {
+  string file_path = 1;
+  bool permanent = 2;
+}
+
+// FileExistsRequest запрос на проверку существования файла
+message FileExistsRequest {
+  string file_path = 1;
+}
+
+// FileExistsResponse ответ о существовании файла
+message FileExistsResponse {
+  bool exists = 1;
+  FileMetadata metadata = 2;
+}
+
+// CreateDirectoryRequest запрос на создание директории
+message CreateDirectoryRequest {
+  string directory_path = 1;
+  bool recursive = 2;
+  map<string, string> metadata = 3;
+}
+
+// ListFilesRequest запрос на список файлов
+message ListFilesRequest {
+  string directory_path = 1;
+  bool recursive = 2;
+  common.QueryRequest query = 3;
+}
+
+// ListFilesResponse ответ со списком файлов
+message ListFilesResponse {
+  repeated FileMetadata files = 1;
+  common.PaginationResponse pagination = 2;
+}
+
+// GetFileInfoRequest запрос на информацию о файле
+message GetFileInfoRequest {
+  string file_path = 1;
+}
+
+// GetFileInfoResponse ответ с информацией о файле
+message GetFileInfoResponse {
+  FileMetadata metadata = 1;
+}
+
+// GetSpaceInfoRequest запрос на информацию о пространстве
+message GetSpaceInfoRequest {
+  string storage_node_id = 1;
+}
+
+// GetSpaceInfoResponse ответ с информацией о пространстве
+message GetSpaceInfoResponse {
+  common.SpaceInfo space_info = 1;
+  string storage_node_id = 2;
+  google.protobuf.Timestamp calculated_at = 3;
+}
+
+// ConnectRequest запрос на подключение
+message ConnectRequest {
+  string storage_node_id = 1;
+  map<string, string> options = 2;
+  google.protobuf.Duration timeout = 3;
+}
+
+// ConnectResponse ответ на подключение
+message ConnectResponse {
+  bool connected = 1;
+  string session_id = 2;
+  google.protobuf.Timestamp connected_at = 3;
+  StorageNode node_info = 4;
+}
+
+// DisconnectRequest запрос на отключение
+message DisconnectRequest {
+  string session_id = 1;
+  bool graceful = 2;
+}
+
+// DisconnectResponse ответ на отключение
+message DisconnectResponse {
+  bool disconnected = 1;
+  google.protobuf.Timestamp disconnected_at = 2;
+}
+
+// IsConnectedRequest запрос на проверку подключения
+message IsConnectedRequest {
+  string storage_node_id = 1;
+}
+
+// IsConnectedResponse ответ о состоянии подключения
+message IsConnectedResponse {
+  bool connected = 1;
+  google.protobuf.Timestamp last_activity = 2;
+  string session_id = 3;
+}

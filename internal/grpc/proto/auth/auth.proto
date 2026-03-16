@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package syncvault.v1.auth;
+
+option go_package = "syncvault/internal/grpc/proto/auth;authv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "common/types.proto";
+
+// AuthService управляет аутентификацией и авторизацией пользователей
+service AuthService {
+  // Вход пользователя
+  rpc Login(LoginRequest) returns (LoginResponse);
+  
+  // Регистрация пользователя
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  
+  // Обновление токена
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  
+  // Выход пользователя
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  
+  // Валидация токена
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  
+  // Получение профиля пользователя
+  rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+  
+  // Обновление профиля пользователя
+  rpc UpdateUserProfile(UpdateUserProfileRequest) returns (UpdateUserProfileResponse);
+  
+  // Изменение пароля
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+  
+  // Сброс пароля
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+}
+
+// User представляет пользователя
+message User {
+  string user_id = 1;
+  string email = 2;
+  string username = 3;
+  string first_name = 4;
+  string last_name = 5;
+  bool is_active = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// LoginRequest запрос на вход
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+  bool remember_me = 3;
+}
+
+// LoginResponse ответ на вход
+message LoginResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  string token_type = 3;
+  int32 expires_in = 4;
+  User user = 5;
+}
+
+// RegisterRequest запрос на регистрацию
+message RegisterRequest {
+  string email = 1;
+  string username = 2;
+  string password = 3;
+  string first_name = 4;
+  string last_name = 5;
+}
+
+// RegisterResponse ответ на регистрацию
+message RegisterResponse {
+  User user = 1;
+  string message = 2;
+}
+
+// RefreshTokenRequest запрос на обновление токена
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+// RefreshTokenResponse ответ на обновление токена
+message RefreshTokenResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+}
+
+// LogoutRequest запрос на выход
+message LogoutRequest {
+  string user_id = 1;
+  string access_token = 2;
+}
+
+// LogoutResponse ответ на выход
+message LogoutResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ValidateTokenRequest запрос на валидацию токена
+message ValidateTokenRequest {
+  string access_token = 1;
+}
+
+// ValidateTokenResponse ответ на валидацию токена
+message ValidateTokenResponse {
+  bool valid = 1;
+  User user = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  string message = 4;
+}
+
+// GetUserProfileRequest запрос на получение профиля
+message GetUserProfileRequest {
+  string user_id = 1;
+}
+
+// GetUserProfileResponse ответ с профилем пользователя
+message GetUserProfileResponse {
+  User user = 1;
+}
+
+// UpdateUserProfileRequest запрос на обновление профиля
+message UpdateUserProfileRequest {
+  string user_id = 1;
+  string email = 2;
+  string username = 3;
+  string first_name = 4;
+  string last_name = 5;
+}
+
+// UpdateUserProfileResponse ответ на обновление профиля
+message UpdateUserProfileResponse {
+  User user = 1;
+  bool updated = 2;
+}
+
+// ChangePasswordRequest запрос на изменение пароля
+message ChangePasswordRequest {
+  string user_id = 1;
+  string current_password = 2;
+  string new_password = 3;
+}
+
+// ChangePasswordResponse ответ на изменение пароля
+message ChangePasswordResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ResetPasswordRequest запрос на сброс пароля
+message ResetPasswordRequest {
+  string email = 1;
+}
+
+// ResetPasswordResponse ответ на сброс пароля
+message ResetPasswordResponse {
+  bool success = 1;
+  string message = 2;
+  string token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
