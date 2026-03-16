@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package syncvault.v1.health;
 
-option go_package = "syncvault/internal/grpc/proto/health/v1;healthv1";
+option go_package = "syncvault/internal/grpc/proto/health;healthv1";
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";

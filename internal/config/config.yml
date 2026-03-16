@@ -54,3 +54,6 @@ mongodb:
   timeout: 10s
   maxPoolSize: 10
   minPoolSize: 5
+
+JWTSecret: 
+  "SyncVault@Dev#2024!xK9mZaaaaaaaa"

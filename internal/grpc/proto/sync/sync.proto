@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package syncvault.v1.sync;
 
-option go_package = "syncvault/internal/grpc/proto/sync/v1;syncv1";
+option go_package = "syncvault/internal/grpc/proto/sync;syncv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";

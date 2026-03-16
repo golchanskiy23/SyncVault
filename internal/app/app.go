@@ -23,6 +23,7 @@ import (
 	"syncvault/internal/domain/ports"
 	"syncvault/internal/domain/repositories"
 	"syncvault/internal/domain/services"
+	grpcsrv "syncvault/internal/grpc/server"
 	"syncvault/internal/infrastructure/database"
 	mongoinfra "syncvault/internal/infrastructure/mongodb"
 	"syncvault/internal/infrastructure/storage"
@@ -47,6 +48,7 @@ type App struct {
 	auditRepo     repositories.SyncAuditRepository
 	auditService  *services.AuditService
 	gridfsStorage ports.Storage
+	grpcServer    *grpcsrv.Server
 }
 
 func New(opts ...Option) (*App, error) {
@@ -76,6 +78,15 @@ func New(opts ...Option) (*App, error) {
 
 	// Set up Hexagonal Architecture dependencies
 	app.setupDependencies()
+
+	// Initialize gRPC server
+	app.grpcServer = grpcsrv.NewServer(
+		grpcsrv.WithHost("0.0.0.0"),
+		grpcsrv.WithPort(50051),
+		grpcsrv.WithJWTSecret("SyncVault@Dev#2024!xK9mZaaaaaaaa"),
+		grpcsrv.WithEnableReflection(true),
+		grpcsrv.WithEnableTLS(false),
+	)
 
 	// Set up middleware and routes
 	app.setupMiddleware()
@@ -192,6 +203,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
+	// Start HTTP server
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
@@ -202,17 +214,34 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Start gRPC server
+	if a.grpcServer != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			log.Printf("gRPC server starting on port 50051")
+			if err := a.grpcServer.Start(); err != nil {
+				log.Printf("gRPC server error: %v", err)
+			}
+		}()
+	}
+
+	// Setup graceful shutdown for gRPC server
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 		<-a.ctx.Done()
-		log.Println("Application context cancelled, shutting down HTTP server...")
+		log.Println("Application context cancelled, shutting down gRPC server...")
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := a.httpServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
+		if a.grpcServer != nil {
+			if err := a.grpcServer.Stop(shutdownCtx); err != nil {
+				log.Printf("gRPC server shutdown error: %v", err)
+			} else {
+				log.Println("gRPC server shut down gracefully")
+			}
 		}
 	}()
 
@@ -228,6 +257,7 @@ func (a *App) Run(ctx context.Context) error {
 	log.Printf("   🔍 Swagger UI: http://localhost:8080/swagger-ui")
 	log.Printf("   📚 Custom Docs: http://localhost:8080/docs")
 	log.Printf("   📄 Swagger JSON: http://localhost:8080/swagger.json")
+	log.Printf("   🚀 gRPC Server: localhost:50051")
 
 	<-a.ctx.Done()
 	log.Println("Application context cancelled, exiting Run()")
