@@ -18,7 +18,8 @@ STORAGE_PROTOS := $(shell find $(PROTO_DIR)/storage -name "*.proto")
 SYNC_PROTOS := $(shell find $(PROTO_DIR)/sync -name "*.proto")
 NOTIFICATION_PROTOS := $(shell find $(PROTO_DIR)/notification -name "*.proto")
 HEALTH_PROTOS := $(shell find $(PROTO_DIR)/health -name "*.proto")
-ALL_PROTOS := $(COMMON_PROTOS) $(STORAGE_PROTOS) $(SYNC_PROTOS) $(NOTIFICATION_PROTOS) $(HEALTH_PROTOS)
+AUTH_PROTOS := $(shell find $(PROTO_DIR)/auth -name "*.proto")
+ALL_PROTOS := $(COMMON_PROTOS) $(STORAGE_PROTOS) $(SYNC_PROTOS) $(NOTIFICATION_PROTOS) $(HEALTH_PROTOS) $(AUTH_PROTOS)
 
 # Цели
 
@@ -131,6 +132,18 @@ proto-health: install-tools proto-common
 		--grpc-gateway_opt=paths=source_relative \
 		$(HEALTH_PROTOS)
 
+proto-auth: install-tools proto-common
+	@echo "🔧 Generating auth proto files..."
+	@protoc \
+		--proto_path=$(PROTO_DIR) \
+		--go_out=$(OUTPUT_DIR) \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=$(OUTPUT_DIR) \
+		--go-grpc_opt=paths=source_relative \
+		--grpc-gateway_out=$(OUTPUT_DIR) \
+		--grpc-gateway_opt=paths=source_relative \
+		$(AUTH_PROTOS)
+
 # Help
 help:
 	@echo "📋 Available commands:"
@@ -140,6 +153,7 @@ help:
 	@echo "  proto-sync     - Generate sync protobuf files"
 	@echo "  proto-notification - Generate notification protobuf files"
 	@echo "  proto-health   - Generate health protobuf files"
+	@echo "  proto-auth     - Generate auth protobuf files"
 	@echo "  clean-proto    - Clean generated protobuf files"
 	@echo "  install-tools  - Install protobuf tools"
 	@echo "  test-proto     - Test protobuf compilation"
