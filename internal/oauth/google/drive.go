@@ -421,6 +421,105 @@ func parseTime(timeStr string) time.Time {
 	return t
 }
 
+// getDriveServiceByAccount получает Drive service для конкретного Google аккаунта
+func (d *DriveAdapter) getDriveServiceByAccount(ctx context.Context, userID, accountID string) (*drive.Service, error) {
+	token, err := d.oauthService.GetValidTokenByAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token for account %s: %w", accountID, err)
+	}
+	client := d.config.OAuth.ToOAuth2Config().Client(ctx, token)
+	return drive.NewService(ctx, option.WithHTTPClient(client))
+}
+
+// ListFilesByAccount список файлов для конкретного аккаунта
+func (d *DriveAdapter) ListFilesByAccount(ctx context.Context, userID, accountID, folderID string, pageSize int64) (*GoogleDriveResponse, error) {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	query := "trashed=false"
+	if folderID != "" {
+		query += fmt.Sprintf(" and '%s' in parents", folderID)
+	}
+	fileList, err := service.Files.List().
+		Q(query).
+		Fields("nextPageToken", "files(id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink)").
+		PageSize(pageSize).Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list files: %w", err)
+	}
+	result := &GoogleDriveResponse{Files: make([]GoogleDriveFile, 0, len(fileList.Files)), NextPageToken: fileList.NextPageToken}
+	for _, f := range fileList.Files {
+		result.Files = append(result.Files, *d.convertDriveFile(f))
+	}
+	return result, nil
+}
+
+// DownloadFileByAccount скачивает файл используя конкретный аккаунт
+func (d *DriveAdapter) DownloadFileByAccount(ctx context.Context, userID, accountID, fileID, localPath string) error {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+		return err
+	}
+	f, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	resp, err := service.Files.Get(fileID).Download()
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+// UploadFileByAccount загружает файл используя конкретный аккаунт
+func (d *DriveAdapter) UploadFileByAccount(ctx context.Context, userID, accountID, localPath, folderID string) (*GoogleDriveFile, error) {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(localPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	uploaded, err := service.Files.Create(&drive.File{
+		Name:    filepath.Base(localPath),
+		Parents: []string{folderID},
+	}).Media(f).Fields("id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink").Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload: %w", err)
+	}
+	return d.convertDriveFile(uploaded), nil
+}
+
+// CreateFolderByAccount создаёт папку используя конкретный аккаунт
+func (d *DriveAdapter) CreateFolderByAccount(ctx context.Context, userID, accountID, name, parentID string) (*GoogleDriveFolder, error) {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	created, err := service.Files.Create(&drive.File{
+		Name:     name,
+		MimeType: "application/vnd.google-apps.folder",
+		Parents:  []string{parentID},
+	}).Fields("id,name,createdTime,modifiedTime,parents,webViewLink").Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create folder: %w", err)
+	}
+	return &GoogleDriveFolder{
+		ID: created.Id, Name: created.Name,
+		CreatedTime: parseTime(created.CreatedTime), ModifiedTime: parseTime(created.ModifiedTime),
+		Parents: created.Parents, WebViewLink: created.WebViewLink,
+	}, nil
+}
+
 // IsRetryableError проверяет можно ли повторить запрос
 func (d *DriveAdapter) IsRetryableError(err error) bool {
 	if e, ok := err.(*googleapi.Error); ok {

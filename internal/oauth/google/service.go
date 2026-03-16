@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -182,24 +183,27 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, state, code string) (*o
 }
 
 // SaveToken сохраняет OAuth токен пользователя
-func (s *OAuthService) SaveToken(ctx context.Context, userID string, token *oauth2.Token) error {
-	// Удаляем существующие токены для этого пользователя и провайдера
-	err := s.RevokeTokens(ctx, userID, ProviderGoogle)
+func (s *OAuthService) SaveToken(ctx context.Context, userID, accountID string, token *oauth2.Token) error {
+	// Деактивируем существующий токен для этого аккаунта
+	_, err := s.db.Exec(ctx,
+		`UPDATE oauth_tokens SET is_active = false, updated_at = $1 WHERE user_id = $2 AND provider = $3 AND account_id = $4`,
+		time.Now(), userID, ProviderGoogle, accountID,
+	)
 	if err != nil {
-		log.Printf("Warning: failed to revoke existing tokens: %v", err)
+		log.Printf("Warning: failed to deactivate existing token: %v", err)
 	}
 
-	// Создаем новую запись токена
-	oauthToken := FromOAuth2Token(userID, ProviderGoogle, token)
+	oauthToken := FromOAuth2Token(userID, ProviderGoogle, accountID, token)
 
 	query := `
-		INSERT INTO oauth_tokens (user_id, provider, access_token, refresh_token, token_type, expiry, scope, created_at, updated_at, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO oauth_tokens (user_id, account_id, provider, access_token, refresh_token, token_type, expiry, scope, created_at, updated_at, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id
 	`
 
 	err = s.db.QueryRow(ctx, query,
 		oauthToken.UserID,
+		oauthToken.AccountID,
 		oauthToken.Provider,
 		oauthToken.AccessToken,
 		oauthToken.RefreshToken,
@@ -211,73 +215,90 @@ func (s *OAuthService) SaveToken(ctx context.Context, userID string, token *oaut
 		oauthToken.IsActive,
 	).Scan(&oauthToken.ID)
 
-	if err != nil {
-		return fmt.Errorf("failed to save token: %w", err)
-	}
-
-	return nil
+	return err
 }
 
-// GetToken получает активный токен пользователя
+// GetToken получает активный токен пользователя (первый найденный)
 func (s *OAuthService) GetToken(ctx context.Context, userID string) (*OAuthToken, error) {
+	return s.GetTokenByAccount(ctx, userID, "")
+}
+
+// GetTokenByAccount получает токен конкретного Google аккаунта
+func (s *OAuthService) GetTokenByAccount(ctx context.Context, userID, accountID string) (*OAuthToken, error) {
 	var token OAuthToken
-	query := `
-		SELECT id, user_id, provider, access_token, refresh_token, token_type, expiry, scope, created_at, updated_at, is_active
-		FROM oauth_tokens
-		WHERE user_id = $1 AND provider = $2 AND is_active = true
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
+	var query string
+	var args []interface{}
 
-	err := s.db.QueryRow(ctx, query, userID, ProviderGoogle).Scan(
-		&token.ID,
-		&token.UserID,
-		&token.Provider,
-		&token.AccessToken,
-		&token.RefreshToken,
-		&token.TokenType,
-		&token.Expiry,
-		&token.Scope,
-		&token.CreatedAt,
-		&token.UpdatedAt,
-		&token.IsActive,
+	if accountID == "" {
+		query = `
+			SELECT id, user_id, COALESCE(account_id,''), provider, access_token, refresh_token, token_type, expiry, scope, created_at, updated_at, is_active
+			FROM oauth_tokens
+			WHERE user_id = $1 AND provider = $2 AND is_active = true
+			ORDER BY created_at DESC LIMIT 1`
+		args = []interface{}{userID, ProviderGoogle}
+	} else {
+		query = `
+			SELECT id, user_id, COALESCE(account_id,''), provider, access_token, refresh_token, token_type, expiry, scope, created_at, updated_at, is_active
+			FROM oauth_tokens
+			WHERE user_id = $1 AND provider = $2 AND account_id = $3 AND is_active = true
+			ORDER BY created_at DESC LIMIT 1`
+		args = []interface{}{userID, ProviderGoogle, accountID}
+	}
+
+	err := s.db.QueryRow(ctx, query, args...).Scan(
+		&token.ID, &token.UserID, &token.AccountID, &token.Provider,
+		&token.AccessToken, &token.RefreshToken, &token.TokenType,
+		&token.Expiry, &token.Scope, &token.CreatedAt, &token.UpdatedAt, &token.IsActive,
 	)
-
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("no active token found for user %s", userID)
+			return nil, fmt.Errorf("no active token found for user %s account %s", userID, accountID)
 		}
 		return nil, fmt.Errorf("failed to get token: %w", err)
 	}
-
 	return &token, nil
 }
 
-// RefreshToken обновляет токен
-func (s *OAuthService) RefreshToken(ctx context.Context, userID string) (*oauth2.Token, error) {
-	// Получаем текущий токен
-	currentToken, err := s.GetToken(ctx, userID)
+// ListAccounts возвращает список подключённых Google аккаунтов пользователя
+func (s *OAuthService) ListAccounts(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT DISTINCT account_id FROM oauth_tokens WHERE user_id = $1 AND provider = $2 AND is_active = true`,
+		userID, ProviderGoogle,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var accounts []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err == nil {
+			accounts = append(accounts, a)
+		}
+	}
+	return accounts, nil
+}
+
+// RefreshToken обновляет токен конкретного аккаунта
+func (s *OAuthService) RefreshToken(ctx context.Context, userID, accountID string) (*oauth2.Token, error) {
+	currentToken, err := s.GetTokenByAccount(ctx, userID, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current token: %w", err)
 	}
 
-	// Проверяем наличие refresh token
 	if currentToken.RefreshToken == "" {
 		return nil, fmt.Errorf("no refresh token available")
 	}
 
-	// Создаем oauth2.Token из сохраненного
 	token := currentToken.ToOAuth2Token()
-
-	// Обновляем токен
 	tokenSource := s.oauth2.TokenSource(ctx, token)
 	newToken, err := tokenSource.Token()
 	if err != nil {
 		return nil, fmt.Errorf("failed to refresh token: %w", err)
 	}
 
-	// Сохраняем новый токен
-	err = s.SaveToken(ctx, userID, newToken)
+	err = s.SaveToken(ctx, userID, accountID, newToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save new token: %w", err)
 	}
@@ -287,18 +308,21 @@ func (s *OAuthService) RefreshToken(ctx context.Context, userID string) (*oauth2
 
 // GetValidToken получает валидный токен (с автоматическим обновлением)
 func (s *OAuthService) GetValidToken(ctx context.Context, userID string) (*oauth2.Token, error) {
-	// Получаем токен
-	token, err := s.GetToken(ctx, userID)
+	return s.GetValidTokenByAccount(ctx, userID, "")
+}
+
+// GetValidTokenByAccount получает валидный токен конкретного аккаунта
+func (s *OAuthService) GetValidTokenByAccount(ctx context.Context, userID, accountID string) (*oauth2.Token, error) {
+	token, err := s.GetTokenByAccount(ctx, userID, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get token: %w", err)
 	}
 
 	oauth2Token := token.ToOAuth2Token()
 
-	// Проверяем нужно ли обновить токен
 	if oauth2Token.Expiry.Before(time.Now().Add(RefreshThreshold)) {
-		log.Printf("Token expires soon, refreshing for user %s", userID)
-		newToken, err := s.RefreshToken(ctx, userID)
+		log.Printf("Token expires soon, refreshing for user %s account %s", userID, accountID)
+		newToken, err := s.RefreshToken(ctx, userID, token.AccountID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to refresh token: %w", err)
 		}
@@ -326,6 +350,24 @@ func (s *OAuthService) DeleteToken(ctx context.Context, tokenID int64) error {
 		return fmt.Errorf("failed to delete token: %w", err)
 	}
 	return nil
+}
+
+// GetAccountEmail получает email Google аккаунта по токену
+func (s *OAuthService) GetAccountEmail(ctx context.Context, token *oauth2.Token) (string, error) {
+	client := s.oauth2.Client(ctx, token)
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	if err != nil {
+		return "", fmt.Errorf("failed to get userinfo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var info struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", fmt.Errorf("failed to decode userinfo: %w", err)
+	}
+	return info.Email, nil
 }
 
 // CleanupExpiredStates очищает истекшие состояния

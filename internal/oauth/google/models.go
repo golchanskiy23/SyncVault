@@ -47,7 +47,8 @@ func (c *GoogleOAuthConfig) ToOAuth2Config() *oauth2.Config {
 type OAuthToken struct {
 	ID           int64     `json:"id" db:"id"`
 	UserID       string    `json:"user_id" db:"user_id"`
-	Provider     string    `json:"provider" db:"provider"` // google
+	AccountID    string    `json:"account_id" db:"account_id"` // email Google аккаунта
+	Provider     string    `json:"provider" db:"provider"`
 	AccessToken  string    `json:"access_token" db:"access_token"`
 	RefreshToken string    `json:"refresh_token" db:"refresh_token"`
 	TokenType    string    `json:"token_type" db:"token_type"`
@@ -90,9 +91,10 @@ func (t *OAuthToken) ToOAuth2Token() *oauth2.Token {
 }
 
 // FromOAuth2Token создает OAuthToken из oauth2.Token
-func FromOAuth2Token(userID, provider string, token *oauth2.Token) *OAuthToken {
+func FromOAuth2Token(userID, provider, accountID string, token *oauth2.Token) *OAuthToken {
 	return &OAuthToken{
 		UserID:       userID,
+		AccountID:    accountID,
 		Provider:     provider,
 		AccessToken:  token.AccessToken,
 		RefreshToken: token.RefreshToken,

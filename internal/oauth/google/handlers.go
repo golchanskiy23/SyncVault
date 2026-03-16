@@ -135,8 +135,15 @@ func (h *OAuthHandlers) AuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Получаем email аккаунта через userinfo
+	accountID, err := h.oauthService.GetAccountEmail(r.Context(), token)
+	if err != nil {
+		log.Printf("Warning: failed to get account email, using userID as accountID: %v", err)
+		accountID = userID
+	}
+
 	// Сохраняем токен
-	err = h.oauthService.SaveToken(r.Context(), userID, token)
+	err = h.oauthService.SaveToken(r.Context(), userID, accountID, token)
 	if err != nil {
 		log.Printf("Failed to save token: %v", err)
 		http.Error(w, "Failed to save token", http.StatusInternalServerError)
@@ -344,6 +351,133 @@ func (h *OAuthHandlers) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	// Отправляем ответ
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(folder)
+}
+
+// ListAccounts возвращает список подключённых Google аккаунтов
+func (h *OAuthHandlers) ListAccounts(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	accounts, err := h.oauthService.ListAccounts(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to list accounts", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"accounts": accounts,
+	})
+}
+
+// SyncDriveToDrive синхронизирует папку между двумя Google аккаунтами через локальный temp
+func (h *OAuthHandlers) SyncDriveToDrive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.GetUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		SrcAccount  string `json:"src_account"`   // email аккаунта-источника
+		SrcFolderID string `json:"src_folder_id"` // ID папки на источнике
+		DstAccount  string `json:"dst_account"`   // email аккаунта-назначения
+		DstFolderID string `json:"dst_folder_id"` // ID папки на назначении
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.SrcAccount == "" || req.SrcFolderID == "" ||
+		req.DstAccount == "" || req.DstFolderID == "" {
+		http.Error(w, "src_account, src_folder_id, dst_account, dst_folder_id are required", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+		defer cancel()
+
+		// Временная папка для промежуточного хранения
+		tmpDir, err := os.MkdirTemp("", "syncvault-drive-to-drive-*")
+		if err != nil {
+			log.Printf("SyncDriveToDrive: failed to create temp dir: %v", err)
+			return
+		}
+		defer os.RemoveAll(tmpDir)
+
+		log.Printf("SyncDriveToDrive: %s:%s → tmp → %s:%s", req.SrcAccount, req.SrcFolderID, req.DstAccount, req.DstFolderID)
+
+		// Шаг 1: скачиваем из источника
+		h.syncDownloadByAccount(ctx, userID, req.SrcAccount, req.SrcFolderID, tmpDir)
+
+		// Шаг 2: загружаем в назначение
+		h.syncUploadByAccount(ctx, userID, req.DstAccount, tmpDir, req.DstFolderID)
+
+		log.Printf("SyncDriveToDrive: completed")
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":     "Drive-to-drive sync started",
+		"src_account": req.SrcAccount,
+		"dst_account": req.DstAccount,
+		"status":      "in_progress",
+	})
+}
+
+// syncDownloadByAccount скачивает рекурсивно используя конкретный аккаунт
+func (h *OAuthHandlers) syncDownloadByAccount(ctx context.Context, userID, accountID, folderID, localPath string) {
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		log.Printf("syncDownloadByAccount: mkdir %s: %v", localPath, err)
+		return
+	}
+
+	result, err := h.driveAdapter.ListFilesByAccount(ctx, userID, accountID, folderID, 1000)
+	if err != nil {
+		log.Printf("syncDownloadByAccount: list %s: %v", folderID, err)
+		return
+	}
+
+	for _, file := range result.Files {
+		if file.MimeType == "application/vnd.google-apps.folder" {
+			h.syncDownloadByAccount(ctx, userID, accountID, file.ID, localPath+"/"+file.Name)
+		} else {
+			dest := localPath + "/" + file.Name
+			if err := h.driveAdapter.DownloadFileByAccount(ctx, userID, accountID, file.ID, dest); err != nil {
+				log.Printf("syncDownloadByAccount: download %s: %v", file.Name, err)
+			} else {
+				log.Printf("syncDownloadByAccount: ✓ %s", file.Name)
+			}
+		}
+	}
+}
+
+// syncUploadByAccount загружает рекурсивно используя конкретный аккаунт
+func (h *OAuthHandlers) syncUploadByAccount(ctx context.Context, userID, accountID, localPath, folderID string) {
+	entries, err := os.ReadDir(localPath)
+	if err != nil {
+		log.Printf("syncUploadByAccount: readdir %s: %v", localPath, err)
+		return
+	}
+
+	for _, entry := range entries {
+		fullPath := localPath + "/" + entry.Name()
+		if entry.IsDir() {
+			sub, err := h.driveAdapter.CreateFolderByAccount(ctx, userID, accountID, entry.Name(), folderID)
+			if err != nil {
+				log.Printf("syncUploadByAccount: mkdir %s: %v", entry.Name(), err)
+				continue
+			}
+			h.syncUploadByAccount(ctx, userID, accountID, fullPath, sub.ID)
+		} else {
+			if _, err := h.driveAdapter.UploadFileByAccount(ctx, userID, accountID, fullPath, folderID); err != nil {
+				log.Printf("syncUploadByAccount: upload %s: %v", entry.Name(), err)
+			} else {
+				log.Printf("syncUploadByAccount: ✓ %s", entry.Name())
+			}
+		}
+	}
 }
 
 // syncDownloadRecursive рекурсивно скачивает папку с Drive
@@ -590,6 +724,11 @@ func (h *OAuthHandlers) Disconnect(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// DriveAdapter возвращает DriveAdapter для использования в других пакетах
+func (h *OAuthHandlers) DriveAdapter() *DriveAdapter {
+	return h.driveAdapter
+}
+
 // RegisterRoutes регистрирует OAuth роуты
 func (h *OAuthHandlers) RegisterRoutes(router chi.Router) {
 	// OAuth flow роуты (без JWT)
@@ -614,6 +753,10 @@ func (h *OAuthHandlers) RegisterRoutes(router chi.Router) {
 		r.Get("/drive/sync/status", h.GetSyncStatus)
 		r.Post("/drive/sync/download", h.SyncDownload)
 		r.Post("/drive/sync/upload", h.SyncUpload)
+		r.Post("/drive/sync/drive-to-drive", h.SyncDriveToDrive)
+
+		// Аккаунты
+		r.Get("/drive/accounts", h.ListAccounts)
 
 		// Управление аккаунтом
 		r.Post("/drive/disconnect", h.Disconnect)
