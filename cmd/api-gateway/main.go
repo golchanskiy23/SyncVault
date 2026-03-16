@@ -16,14 +16,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
+
+	"syncvault/internal/auth"
+	"syncvault/internal/config"
 )
 
 const (
 	AuthServiceURL         = "http://localhost:50056"
 	StorageServiceURL      = "http://localhost:50054"
-	SyncServiceURL        = "http://localhost:50053"
+	SyncServiceURL         = "http://localhost:50053"
 	FileServiceURL         = "http://localhost:50052"
-	NotificationServiceURL  = "http://localhost:50055"
+	NotificationServiceURL = "http://localhost:50055"
 )
 
 // Circuit Breaker состояния
@@ -37,18 +41,18 @@ const (
 
 // Circuit Breaker структура
 type CircuitBreaker struct {
-	maxFailures   int
-	resetTimeout  time.Duration
-	failures      int
-	lastFailTime  time.Time
-	state         CircuitState
-	mutex         sync.RWMutex
+	maxFailures  int
+	resetTimeout time.Duration
+	failures     int
+	lastFailTime time.Time
+	state        CircuitState
+	mutex        sync.RWMutex
 }
 
 func NewCircuitBreaker(maxFailures int, resetTimeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
 		maxFailures:  maxFailures,
-		resetTimeout:  resetTimeout,
+		resetTimeout: resetTimeout,
 		state:        CircuitClosed,
 	}
 }
@@ -69,7 +73,7 @@ func (cb *CircuitBreaker) Call(fn func() error) error {
 	if err != nil {
 		cb.failures++
 		cb.lastFailTime = time.Now()
-		
+
 		// Если превышен порог отказов, разрываем цепь
 		if cb.failures >= cb.maxFailures {
 			cb.state = CircuitOpen
@@ -94,9 +98,32 @@ type APIServer struct {
 	router      *chi.Mux
 	services    map[string]string
 	healthCheck map[string]string
+	jwtService  *auth.JWTService
+	config      *config.Config
 }
 
 func NewAPIServer() *APIServer {
+	// Загружаем конфигурацию
+	cfg := config.LoadConfig()
+
+	// Создаем Redis клиент
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+
+	// Создаем JWT конфигурацию
+	jwtConfig := auth.DefaultJWTConfig()
+	jwtConfig.AccessSecret = cfg.JWT.AccessSecret
+	jwtConfig.RefreshSecret = cfg.JWT.RefreshSecret
+	jwtConfig.AccessTTL = cfg.JWT.AccessTTL
+	jwtConfig.RefreshTTL = cfg.JWT.RefreshTTL
+	jwtConfig.Issuer = cfg.JWT.Issuer
+
+	// Создаем JWT сервис
+	jwtService := auth.NewJWTService(jwtConfig, rdb)
+
 	return &APIServer{
 		router: chi.NewRouter(),
 		services: map[string]string{
@@ -113,6 +140,8 @@ func NewAPIServer() *APIServer {
 			"file":         FileServiceURL + "/health",
 			"notification": NotificationServiceURL + "/health",
 		},
+		jwtService: jwtService,
+		config:     cfg,
 	}
 }
 
@@ -133,16 +162,25 @@ func (s *APIServer) setupRoutes() {
 
 	// API Routes
 	s.router.Route("/api/v1", func(r chi.Router) {
-		// Authentication routes
+		// Authentication routes (public)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", s.proxyHandler("auth"))
 			r.Post("/register", s.proxyHandler("auth"))
-			r.Post("/logout", s.proxyHandler("auth"))
 			r.Post("/refresh", s.proxyHandler("auth"))
 			r.Post("/validate", s.proxyHandler("auth"))
-			
-			// Device management routes
+
+			// Protected routes (require authentication)
+			r.Group(func(r chi.Router) {
+				r.Use(s.jwtService.AuthMiddleware)
+				r.Post("/logout", s.proxyHandler("auth"))
+				r.Get("/profile", s.proxyHandler("auth"))
+				r.Put("/profile", s.proxyHandler("auth"))
+				r.Post("/change-password", s.proxyHandler("auth"))
+			})
+
+			// Device management routes (protected)
 			r.Route("/devices", func(r chi.Router) {
+				r.Use(s.jwtService.AuthMiddleware)
 				r.Get("/", s.proxyHandler("auth"))
 				r.Post("/", s.proxyHandler("auth"))
 				r.Delete("/{deviceID}", s.proxyHandler("auth"))
@@ -150,8 +188,9 @@ func (s *APIServer) setupRoutes() {
 			})
 		})
 
-		// Storage routes
+		// Storage routes (protected)
 		r.Route("/storage", func(r chi.Router) {
+			r.Use(s.jwtService.AuthMiddleware)
 			r.Post("/files", s.proxyHandler("storage"))
 			r.Get("/files/{fileID}", s.proxyHandler("storage"))
 			r.Delete("/files/{fileID}", s.proxyHandler("storage"))
@@ -160,8 +199,9 @@ func (s *APIServer) setupRoutes() {
 			r.Post("/conflicts/resolve", s.proxyHandler("storage"))
 		})
 
-		// Sync routes
+		// Sync routes (protected)
 		r.Route("/sync", func(r chi.Router) {
+			r.Use(s.jwtService.AuthMiddleware)
 			r.Post("/start", s.proxyHandler("sync"))
 			r.Get("/status/{sessionID}", s.proxyHandler("sync"))
 			r.Post("/cancel/{sessionID}", s.proxyHandler("sync"))
@@ -171,16 +211,18 @@ func (s *APIServer) setupRoutes() {
 			r.Post("/conflicts/{sessionID}/resolve", s.proxyHandler("sync"))
 		})
 
-		// File routes
+		// File routes (protected)
 		r.Route("/files", func(r chi.Router) {
+			r.Use(s.jwtService.AuthMiddleware)
 			r.Post("/upload", s.proxyHandler("file"))
 			r.Get("/download/{fileID}", s.proxyHandler("file"))
 			r.Get("/list", s.proxyHandler("file"))
 			r.Delete("/{fileID}", s.proxyHandler("file"))
 		})
 
-		// Notification routes
+		// Notification routes (protected)
 		r.Route("/notifications", func(r chi.Router) {
+			r.Use(s.jwtService.AuthMiddleware)
 			r.Get("/", s.proxyHandler("notification"))
 			r.Post("/", s.proxyHandler("notification"))
 			r.Put("/{notificationID}/read", s.proxyHandler("notification"))
@@ -215,7 +257,7 @@ func (s *APIServer) proxyHandler(service string) http.HandlerFunc {
 
 		// Создаем reverse proxy
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		
+
 		// Добавляем custom headers
 		r.Header.Set("X-Gateway-Service", service)
 		r.Header.Set("X-Gateway-Request-ID", r.Header.Get("X-Request-ID"))
@@ -252,12 +294,12 @@ func (s *APIServer) proxyHandler(service string) http.HandlerFunc {
 
 func (s *APIServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	response := map[string]interface{}{
-		"status": "healthy",
+		"status":    "healthy",
 		"timestamp": time.Now().UTC(),
-		"version": "1.0.0",
-		"services": s.checkServicesHealth(),
+		"version":   "1.0.0",
+		"services":  s.checkServicesHealth(),
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -266,13 +308,13 @@ func (s *APIServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *APIServer) servicesHealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	healthStatus := make(map[string]interface{})
-	
+
 	for service, healthURL := range s.healthCheck {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		
+
 		req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
 		if err != nil {
 			healthStatus[service] = map[string]interface{}{
@@ -304,11 +346,11 @@ func (s *APIServer) servicesHealthHandler(w http.ResponseWriter, r *http.Request
 
 func (s *APIServer) checkServicesHealth() map[string]interface{} {
 	status := make(map[string]interface{})
-	
+
 	for service := range s.services {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		
+
 		req, err := http.NewRequestWithContext(ctx, "GET", s.healthCheck[service], nil)
 		if err != nil {
 			status[service] = "error"
@@ -321,18 +363,18 @@ func (s *APIServer) checkServicesHealth() map[string]interface{} {
 		} else {
 			status[service] = "healthy"
 		}
-		
+
 		if resp != nil {
 			resp.Body.Close()
 		}
 	}
-	
+
 	return status
 }
 
 func (s *APIServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	
+
 	html := `<!DOCTYPE html>
 <html>
 <head>
@@ -399,13 +441,13 @@ func (s *APIServer) indexHandler(w http.ResponseWriter, r *http.Request) {
     </div>
 </body>
 </html>`
-	
+
 	w.Write([]byte(html))
 }
 
 func (s *APIServer) docsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	docs := map[string]interface{}{
 		"title":       "SyncVault API Gateway",
 		"version":     "1.0.0",
@@ -413,7 +455,7 @@ func (s *APIServer) docsHandler(w http.ResponseWriter, r *http.Request) {
 		"base_url":    "http://localhost:8080",
 		"features": []string{
 			"Circuit Breaker",
-			"Idempotency", 
+			"Idempotency",
 			"Rate Limiting",
 			"CORS Support",
 			"Health Checks",
@@ -507,7 +549,7 @@ func rateLimitMiddleware(requestsPerMinute int) func(http.Handler) http.Handler 
 			// В реальном приложении здесь был бы Redis
 			clientIP := r.RemoteAddr
 			log.Printf("Rate limiting check for IP: %s", clientIP)
-			
+
 			next.ServeHTTP(w, r)
 		})
 	}
