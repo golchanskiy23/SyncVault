@@ -271,3 +271,20 @@ func (ds *DeviceStorage) WatchFiles(ctx context.Context) error {
 	// Используя fsnotify или similar
 	return nil
 }
+
+// DeleteFile удаляет файл с устройства
+func (ds *DeviceStorage) DeleteFile(ctx context.Context, relativePath string) error {
+	fullPath := filepath.Join(ds.StoragePath, relativePath)
+
+	// Удаляем файл из файловой системы
+	if err := os.Remove(fullPath); err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	// Удаляем метаданные
+	ds.metadataDB.mutex.Lock()
+	delete(ds.metadataDB.files, relativePath)
+	ds.metadataDB.mutex.Unlock()
+
+	return nil
+}
