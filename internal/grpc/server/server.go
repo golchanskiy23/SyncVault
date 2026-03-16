@@ -120,12 +120,10 @@ func WithEnableTLS(enable bool) Option {
 func NewServer(opts ...Option) *Server {
 	config := DefaultConfig()
 
-	// Применяем опции
 	for _, opt := range opts {
 		opt(config)
 	}
 
-	// Создаем JWT валидатор
 	jwtValidator := interceptors.NewJWTValidator(
 		config.JWTSecret,
 		config.JWTIssuer,
@@ -133,12 +131,10 @@ func NewServer(opts ...Option) *Server {
 		config.RefreshExpiry,
 	)
 
-	// Создаем простой logger
 	logger := &SimpleLogger{
 		level: config.LogLevel,
 	}
 
-	// Публичные методы (без аутентификации)
 	publicMethods := []string{
 		"Check",
 		"Watch",
@@ -148,7 +144,6 @@ func NewServer(opts ...Option) *Server {
 		"Startup",
 	}
 
-	// Создаем интерцепторы
 	loggingInterceptor := interceptors.NewLoggingInterceptor(logger)
 	authInterceptor := interceptors.NewAuthInterceptor(jwtValidator, publicMethods...)
 
@@ -165,15 +160,18 @@ func NewServer(opts ...Option) *Server {
 	}
 }
 
-// Start запускает gRPC сервер
+// Start запускает gRPC сервер на настроенном адресе
 func (s *Server) Start() error {
-	// Создаем listener
 	lis, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.config.Host, s.config.Port))
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s:%d: %w", s.config.Host, s.config.Port, err)
 	}
+	return s.StartWithListener(lis)
+}
 
-	// Создаем gRPC сервер с интерцепторами
+// StartWithListener запускает gRPC сервер на переданном listener.
+// Используется в тестах (bufconn) и в Start().
+func (s *Server) StartWithListener(lis net.Listener) error {
 	grpcServer := s.createGRPCServer()
 
 	s.logger.Info("Starting gRPC server",
@@ -183,49 +181,39 @@ func (s *Server) Start() error {
 		"reflection", s.config.EnableReflection,
 	)
 
-	// Регистрируем сервисы
 	s.registerServices(grpcServer)
 
-	// Включаем reflection если нужно
 	if s.config.EnableReflection {
 		reflection.Register(grpcServer)
 		s.logger.Info("gRPC reflection enabled")
 	}
 
-	// Запускаем сервер
 	return grpcServer.Serve(lis)
 }
 
 // Stop останавливает gRPC сервер
 func (s *Server) Stop(ctx context.Context) error {
 	s.logger.Info("Stopping gRPC server")
-	// Здесь будет логика graceful shutdown
 	return nil
 }
 
 // createGRPCServer создает настроенный gRPC сервер
 func (s *Server) createGRPCServer() *grpc.Server {
 	opts := []grpc.ServerOption{
-		// Unary интерцепторы
 		grpc.ChainUnaryInterceptor(
 			s.loggingInterceptor.UnaryInterceptor(),
 			s.authInterceptor.UnaryInterceptor(),
 		),
-		// Stream интерцепторы
 		grpc.ChainStreamInterceptor(
 			s.loggingInterceptor.StreamInterceptor(),
 			s.authInterceptor.StreamInterceptor(),
 		),
-		// Размеры сообщений
 		grpc.MaxRecvMsgSize(s.config.MaxRecvMsgSize),
 		grpc.MaxSendMsgSize(s.config.MaxSendMsgSize),
-		// Таймауты
 		grpc.ConnectionTimeout(s.config.Timeout),
 	}
 
-	// Добавляем TLS если нужно
 	if s.config.EnableTLS {
-		// Здесь будет логика TLS конфигурации
 		s.logger.Info("TLS enabled (cert file: %s, key file: %s)", s.config.CertFile, s.config.KeyFile)
 	}
 
@@ -234,19 +222,15 @@ func (s *Server) createGRPCServer() *grpc.Server {
 
 // registerServices регистрирует gRPC сервисы
 func (s *Server) registerServices(grpcServer *grpc.Server) {
-	// Регистрируем Storage сервис
 	storagev1.RegisterStorageServiceServer(grpcServer, s.storageService)
 	s.logger.Info("Storage service registered")
 
-	// Регистрируем Sync сервис
 	syncv1.RegisterSyncServiceServer(grpcServer, s.syncService)
 	s.logger.Info("Sync service registered")
 
-	// Регистрируем Notification сервис
 	notificationv1.RegisterNotificationServiceServer(grpcServer, s.notificationService)
 	s.logger.Info("Notification service registered")
 
-	// Регистрируем Health сервис
 	healthv1.RegisterHealthServiceServer(grpcServer, s.healthService)
 	s.logger.Info("Health service registered")
 }
@@ -257,8 +241,8 @@ func DefaultConfig() *ServerConfig {
 		Host:             "0.0.0.0",
 		Port:             50051,
 		Timeout:          30 * time.Second,
-		MaxRecvMsgSize:   4 * 1024 * 1024, // 4MB
-		MaxSendMsgSize:   4 * 1024 * 1024, // 4MB
+		MaxRecvMsgSize:   4 * 1024 * 1024,
+		MaxSendMsgSize:   4 * 1024 * 1024,
 		EnableReflection: true,
 		EnableTLS:        false,
 
@@ -274,12 +258,8 @@ func DefaultConfig() *ServerConfig {
 
 // ConfigFromYAML создает конфигурацию из YAML файла
 func ConfigFromYAML(filename string) (*ServerConfig, error) {
-	// Здесь будет логика чтения YAML конфигурации
 	config := DefaultConfig()
-
-	// Временная реализация - в реальном приложении использовать yaml.Unmarshal
 	log.Printf("Loading config from %s (using defaults for now)", filename)
-
 	return config, nil
 }
 
@@ -288,23 +268,17 @@ func ValidateConfig(config *ServerConfig) error {
 	if config.Port <= 0 || config.Port > 65535 {
 		return fmt.Errorf("invalid port: %d (must be 1-65535)", config.Port)
 	}
-
 	if config.Timeout <= 0 {
 		return fmt.Errorf("timeout must be positive")
 	}
-
 	if config.MaxRecvMsgSize <= 0 {
 		return fmt.Errorf("max_recv_msg_size must be positive")
 	}
-
 	if config.MaxSendMsgSize <= 0 {
 		return fmt.Errorf("max_send_msg_size must be positive")
 	}
-
-	// Валидируем JWT секрет
 	if err := interceptors.ValidateSecretKey(config.JWTSecret); err != nil {
 		return fmt.Errorf("invalid JWT secret: %w", err)
 	}
-
 	return nil
 }

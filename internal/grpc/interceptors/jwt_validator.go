@@ -28,82 +28,22 @@ func NewJWTValidator(secretKey string, issuer string, tokenExpiry, refreshExpiry
 	}
 }
 
-// ValidateToken валидирует JWT токен и возвращает claims
-func (j *JWTValidatorImpl) ValidateToken(tokenString string) (*Claims, error) {
-	// Простая валидация для демонстрации
-	// В реальном приложении здесь должна быть полноценная JWT валидация
-
-	// Проверяем формат токена
-	parts := strings.Split(tokenString, ".")
-	if len(parts) != 2 && len(parts) != 3 {
-		return nil, fmt.Errorf("invalid token format")
-	}
-
-	// Декодируем payload (в реальном приложении с проверкой подписи)
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode token payload: %w", err)
-	}
-
-	// Парсим JSON payload
-	var tokenData map[string]interface{}
-	if err := json.Unmarshal([]byte(payload), &tokenData); err != nil {
-		return nil, fmt.Errorf("failed to parse token payload: %w", err)
-	}
-
-	// Извлекаем claims
-	claims := &Claims{}
-
-	if userID, ok := tokenData["user_id"].(string); ok {
-		claims.UserID = userID
-	}
-
-	if nodeID, ok := tokenData["node_id"].(string); ok {
-		claims.NodeID = nodeID
-	}
-
-	if email, ok := tokenData["email"].(string); ok {
-		claims.Email = email
-	}
-
-	if isActive, ok := tokenData["is_active"].(bool); ok {
-		claims.IsActive = isActive
-	}
-
-	if roles, ok := tokenData["roles"].([]interface{}); ok {
-		claims.Roles = make([]string, len(roles))
-		for i, role := range roles {
-			if roleStr, ok := role.(string); ok {
-				claims.Roles[i] = roleStr
-			}
-		}
-	}
-
-	// Проверяем срок действия
-	if exp, ok := tokenData["exp"].(float64); ok {
-		if time.Now().Unix() > int64(exp) {
-			return nil, fmt.Errorf("token expired")
-		}
-	}
-
-	// Проверяем issuer
-	if issuer, ok := tokenData["iss"].(string); ok && issuer != j.issuer {
-		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", j.issuer, issuer)
-	}
-
-	// Проверяем, что токен активен
-	if isActive, ok := tokenData["is_active"].(bool); ok && !isActive {
-		return nil, fmt.Errorf("token is not active")
-	}
-
-	return claims, nil
-}
-
-// GenerateToken генерирует новый JWT токен
+// GenerateToken генерирует новый JWT токен формата header.payload.signature
 func (j *JWTValidatorImpl) GenerateToken(claims *Claims, expiry time.Duration) (string, error) {
 	now := time.Now()
 
-	// Создаем payload
+	// Header
+	header := map[string]string{
+		"alg": "HS256",
+		"typ": "JWT",
+	}
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal header: %w", err)
+	}
+	encodedHeader := base64.RawURLEncoding.EncodeToString(headerBytes)
+
+	// Payload
 	payload := map[string]interface{}{
 		"user_id":   claims.UserID,
 		"node_id":   claims.NodeID,
@@ -115,21 +55,88 @@ func (j *JWTValidatorImpl) GenerateToken(claims *Claims, expiry time.Duration) (
 		"exp":       now.Add(expiry).Unix(),
 		"jti":       generateJTI(),
 	}
-
-	// Кодируем payload
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal payload: %w", err)
 	}
-
 	encodedPayload := base64.RawURLEncoding.EncodeToString(payloadBytes)
 
-	// Создаем подпись (в реальном приложении с использованием HMAC)
-	signature := j.createSignature(encodedPayload)
+	// Signature подписываем header.payload
+	signingInput := encodedHeader + "." + encodedPayload
+	signature := j.createSignature(signingInput)
 	encodedSignature := base64.RawURLEncoding.EncodeToString(signature)
 
-	// Собираем токен
-	return fmt.Sprintf("%s.%s", encodedPayload, encodedSignature), nil
+	return encodedHeader + "." + encodedPayload + "." + encodedSignature, nil
+}
+
+// ValidateToken валидирует JWT токен формата header.payload.signature
+func (j *JWTValidatorImpl) ValidateToken(tokenString string) (*Claims, error) {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format: expected 3 parts, got %d", len(parts))
+	}
+
+	// Проверяем подпись
+	signingInput := parts[0] + "." + parts[1]
+	expectedSig := j.createSignature(signingInput)
+	expectedEncoded := base64.RawURLEncoding.EncodeToString(expectedSig)
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedEncoded)) {
+		return nil, fmt.Errorf("invalid token signature")
+	}
+
+	// Декодируем payload (parts[1])
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token payload: %w", err)
+	}
+
+	var tokenData map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &tokenData); err != nil {
+		return nil, fmt.Errorf("failed to parse token payload: %w", err)
+	}
+
+	// Проверяем срок действия
+	if exp, ok := tokenData["exp"].(float64); ok {
+		if time.Now().Unix() > int64(exp) {
+			return nil, fmt.Errorf("token expired")
+		}
+	}
+
+	// Проверяем issuer
+	if iss, ok := tokenData["iss"].(string); ok && iss != j.issuer {
+		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", j.issuer, iss)
+	}
+
+	// Проверяем is_active
+	if isActive, ok := tokenData["is_active"].(bool); ok && !isActive {
+		return nil, fmt.Errorf("token is not active")
+	}
+
+	// Извлекаем claims
+	claims := &Claims{}
+
+	if v, ok := tokenData["user_id"].(string); ok {
+		claims.UserID = v
+	}
+	if v, ok := tokenData["node_id"].(string); ok {
+		claims.NodeID = v
+	}
+	if v, ok := tokenData["email"].(string); ok {
+		claims.Email = v
+	}
+	if v, ok := tokenData["is_active"].(bool); ok {
+		claims.IsActive = v
+	}
+	if roles, ok := tokenData["roles"].([]interface{}); ok {
+		claims.Roles = make([]string, len(roles))
+		for i, role := range roles {
+			if r, ok := role.(string); ok {
+				claims.Roles[i] = r
+			}
+		}
+	}
+
+	return claims, nil
 }
 
 // GenerateTokenPair генерирует access и refresh токены
@@ -153,23 +160,20 @@ func (j *JWTValidatorImpl) GenerateTokenPair(claims *Claims) (*TokenPair, error)
 	}, nil
 }
 
-// createSignature создает подпись для payload
-func (j *JWTValidatorImpl) createSignature(payload string) []byte {
-	h := hmac.New(sha256.New, j.secretKey)
-	h.Write([]byte(payload))
-	return h.Sum(nil)
-}
-
 // RefreshToken обновляет токен используя refresh token
 func (j *JWTValidatorImpl) RefreshToken(refreshTokenString string) (*TokenPair, error) {
-	// Валидируем refresh токен
 	claims, err := j.ValidateToken(refreshTokenString)
 	if err != nil {
 		return nil, fmt.Errorf("invalid refresh token: %w", err)
 	}
-
-	// Генерируем новую пару токенов
 	return j.GenerateTokenPair(claims)
+}
+
+// createSignature создает HMAC-SHA256 подпись
+func (j *JWTValidatorImpl) createSignature(input string) []byte {
+	h := hmac.New(sha256.New, j.secretKey)
+	h.Write([]byte(input))
+	return h.Sum(nil)
 }
 
 // TokenPair представляет пару access и refresh токенов
@@ -181,9 +185,8 @@ type TokenPair struct {
 	RefreshExpiresIn int64  `json:"refresh_expires_in"`
 }
 
-// generateJTI генерирует уникальный ID для токена (JWT ID)
+// generateJTI генерирует уникальный ID для токена
 func generateJTI() string {
-	// Используем HMAC для генерации уникального ID
 	h := hmac.New(sha256.New, []byte(fmt.Sprintf("%d", time.Now().UnixNano())))
 	h.Write([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
 	return base64.URLEncoding.EncodeToString(h.Sum(nil))[:16]
@@ -195,7 +198,6 @@ func ValidateSecretKey(secretKey string) error {
 		return fmt.Errorf("secret key must be at least 32 characters long")
 	}
 
-	// Проверяем, что ключ содержит разные типы символов
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
 	for _, char := range secretKey {
 		switch {
