@@ -55,5 +55,24 @@ mongodb:
   maxPoolSize: 10
   minPoolSize: 5
 
-JWTSecret: 
-  "SyncVault@Dev#2024!xK9mZaaaaaaaa"
+kafka:
+  brokers:
+    - "localhost:9092"
+  groupId: "syncvault-group"
+  fileEventsTopic: "file.events"
+  syncEventsTopic: "sync.events"
+  conflictEventsTopic: "conflict.events"
+  dlqTopic: "dlq.file.events"
+  producerTimeout: 10s
+  consumerTimeout: 10s
+  maxRetries: 3
+  retryBackoff: 1s
+  batchSize: 100
+  batchTimeout: 1s
+
+jwt:
+  accessSecret: "your-access-secret-key-change-in-production"
+  refreshSecret: "your-refresh-secret-key-change-in-production"
+  accessTTL: 15m
+  refreshTTL: 720h
+  issuer: "syncvault"
