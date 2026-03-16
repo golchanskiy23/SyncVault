@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -123,11 +124,11 @@ func main() {
 			}
 
 			response := map[string]interface{}{
-				"connected":   true,
-				"provider":    "google",
-				"user_id":     userID,
+				"connected":    true,
+				"provider":     "google",
+				"user_id":      userID,
 				"token_expiry": token.Expiry,
-				"scope":       token.Scope,
+				"scope":        token.Scope,
 			}
 			json.NewEncoder(w).Encode(response)
 		})
@@ -150,9 +151,9 @@ func main() {
 			// Добавляем OAuth информацию если доступно
 			if token, err := oauthHandlers.OAuthService.GetToken(r.Context(), userID); err == nil {
 				profile["google_drive"] = map[string]interface{}{
-					"connected":   true,
+					"connected":    true,
 					"token_expiry": token.Expiry,
-					"scope":       token.Scope,
+					"scope":        token.Scope,
 				}
 			} else {
 				profile["google_drive"] = map[string]interface{}{
@@ -165,7 +166,7 @@ func main() {
 	})
 
 	// Запускаем HTTP сервер
-	port := "8080"
+	port := "8081"
 	if envPort := os.Getenv("OAUTH_SERVICE_PORT"); envPort != "" {
 		port = envPort
 	}

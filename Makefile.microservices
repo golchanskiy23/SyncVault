@@ -3,8 +3,8 @@
 .PHONY: deps-start deps-stop services-start services-stop dev-start dev-stop build-services logs status clean
 
 # Переменные
-SERVICES = auth-service storage-service file-service sync-service notification-service api-gateway
-SERVICE_PORTS = 50056 50054 50052 50053 50055
+SERVICES = auth-service sync-service api-gateway oauth-service
+SERVICE_PORTS = 50056 50053 8080 8081
 
 # Запуск зависимостей (базы данных)
 deps-start:
@@ -57,15 +57,12 @@ dev-start: deps-start services-start
 	@echo "  🗄️  PostgreSQL: localhost:5432"
 	@echo "  🔴 Redis: localhost:6379"
 	@echo "  🍃 MongoDB: localhost:27017"
-	@echo "  📊 Prometheus: http://localhost:9090"
-	@echo "  📈 Grafana: http://localhost:3000 (admin/admin123)"
 	@echo ""
 	@echo "🔧 Microservices:"
 	@echo "  🔐 Auth Service: localhost:50056"
-	@echo "  💾 Storage Service: localhost:50054"
-	@echo "  📁 File Service: localhost:50052"
 	@echo "  🔄 Sync Service: localhost:50053"
-	@echo "  🔔 Notification Service: localhost:50055"
+	@echo "  🌐 API Gateway:  localhost:8080"
+	@echo "  🔑 OAuth Service: localhost:8081"
 
 # Полная остановка
 dev-stop: services-stop deps-stop
@@ -111,21 +108,34 @@ run-auth:
 	@echo "🔐 Starting Auth Service..."
 	go run cmd/auth-service/main.go
 
-run-storage:
-	@echo "💾 Starting Storage Service..."
-	go run cmd/storage-service/main.go
-
-run-file:
-	@echo "📁 Starting File Service..."
-	go run cmd/file-service/main.go
-
 run-sync:
 	@echo "🔄 Starting Sync Service..."
 	go run cmd/sync-service/main.go
 
-run-notification:
-	@echo "🔔 Starting Notification Service..."
-	go run cmd/notification-service/main.go
+run-oauth:
+	@echo "🔑 Starting OAuth Service..."
+	go run cmd/oauth-service/main.go
+
+# Tools (dev/ops utilities)
+migrate:
+	@echo "🗄️  Running PostgreSQL migrations..."
+	go run tools/migrate/main.go $(ARGS)
+
+migrate-mongodb:
+	@echo "🍃 Running MongoDB migrations..."
+	go run tools/migrate-mongodb/main.go
+
+seed:
+	@echo "🌱 Seeding database..."
+	go run tools/seed/main.go $(ARGS)
+
+inspect:
+	@echo "🔍 Inspecting database..."
+	go run tools/inspect/main.go $(ARGS)
+
+device-client:
+	@echo "📱 Starting device client..."
+	go run tools/device-client/main.go $(ARGS)
 
 # Запуск зависимостей с мониторингом
 deps-start-monitoring:
@@ -149,10 +159,16 @@ help:
 	@echo ""
 	@echo "🔧 Individual Services:"
 	@echo "  run-auth           - Start Auth Service"
-	@echo "  run-storage        - Start Storage Service"
-	@echo "  run-file           - Start File Service"
 	@echo "  run-sync           - Start Sync Service"
-	@echo "  run-notification   - Start Notification Service"
+	@echo "  run-oauth          - Start OAuth Service"
+	@echo "  run-gateway        - Start API Gateway"
+	@echo ""
+	@echo "🛠️  Tools:"
+	@echo "  migrate            - Run PostgreSQL migrations (ARGS=up|down|...)"
+	@echo "  migrate-mongodb    - Run MongoDB migrations"
+	@echo "  seed               - Seed database with test data"
+	@echo "  inspect            - Inspect database"
+	@echo "  device-client      - Run gRPC device client"
 	@echo ""
 	@echo "🔨 Build & Deploy:"
 	@echo "  build-services     - Build all microservices"

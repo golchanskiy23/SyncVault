@@ -172,7 +172,7 @@ include Makefile.microservices
 # API Gateway
 run-gateway:
 	@echo "🌐 Starting API Gateway..."
-	cd cmd/api-gateway && go run main.go
+	go run ./cmd/api-gateway
 
 # Полная среда разработки с API Gateway
 dev-full:
