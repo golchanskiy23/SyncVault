@@ -1,0 +1,96 @@
+http:
+  host: ""
+  port: 8080
+  readTimeout: 15s
+  writeTimeout: 15s
+  idleTimeout: 60s
+
+shutdown:
+  timeout: 30s
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: "YOUR_DB_PASSWORD"
+  dbname: syncvault
+  sslmode: disable
+  maxOpenConns: 25
+  maxIdleConns: 5
+  connMaxLifetime: 5m
+
+redis:
+  host: "localhost"
+  port: 6379
+  address: "localhost:6379"
+  password: ""
+  db: 0
+  poolSize: 10
+  minIdleConns: 5
+  maxRetries: 3
+  dialTimeout: 5s
+  readTimeout: 3s
+  writeTimeout: 3s
+  poolTimeout: 4s
+
+jwt:
+  accessSecret: "YOUR_ACCESS_SECRET_KEY"
+  refreshSecret: "YOUR_REFRESH_SECRET_KEY"
+  accessTTL: "15m"
+  refreshTTL: "720h"
+  issuer: "syncvault"
+
+oauth:
+  google_drive:
+    oauth:
+      client_id: "YOUR_GOOGLE_CLIENT_ID"
+      client_secret: "YOUR_GOOGLE_CLIENT_SECRET"
+      redirect_url: "http://localhost:8081/auth/google/callback"
+      scopes:
+        - "https://www.googleapis.com/auth/drive.readonly"
+        - "https://www.googleapis.com/auth/drive.file"
+        - "https://www.googleapis.com/auth/drive.metadata.readonly"
+    api_base_url: "https://www.googleapis.com/drive/v3"
+    upload_url: "https://www.googleapis.com/upload/drive/v3"
+    max_file_size: 104857600 # 100MB
+    chunk_size: 1048576 # 1MB
+    retry_count: 3
+    retry_delay: "1s"
+
+cache:
+  fileMetadataTTL: 5m
+
+session:
+  tokenExpiry: 24h
+  maxSessions: 5
+
+rateLimit:
+  requestsPerMinute: 60
+  requestsPerHour: 1000
+
+lock:
+  defaultTTL: 30s
+  retryCount: 3
+  retryDelay: 100ms
+
+mongodb:
+  uri: "mongodb://localhost:27017"
+  database: "syncvault_audit"
+  timeout: 10s
+  maxPoolSize: 10
+  minPoolSize: 5
+
+kafka:
+  brokers:
+    - "localhost:9092"
+  groupId: "syncvault-group"
+  fileEventsTopic: "file.events"
+  syncEventsTopic: "sync.events"
+  conflictEventsTopic: "conflict.events"
+  dlqTopic: "dlq.file.events"
+  producerTimeout: 10s
+  consumerTimeout: 10s
+  maxRetries: 3
+  retryBackoff: 1s
+  batchSize: 100
+  batchTimeout: 1s
