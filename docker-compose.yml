@@ -7,7 +7,6 @@
 version: '3.8'
 
 services:
-  # PostgreSQL база данных
   postgres:
     image: postgres:15-alpine
     container_name: syncvault-postgres
@@ -29,7 +28,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis для кеширования
   redis:
     image: redis:7-alpine
     container_name: syncvault-redis
@@ -45,7 +43,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # MongoDB для аудита
   mongodb:
     image: mongo:6
     container_name: syncvault-mongodb
@@ -66,32 +63,96 @@ services:
       retries: 5
 
   # Prometheus для мониторинга
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: syncvault-prometheus
+#  prometheus:
+#    image: prom/prometheus:latest
+#    container_name: syncvault-prometheus
+#    ports:
+#      - "9090:9090"
+#    volumes:
+#      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+#      - prometheus_data:/prometheus
+#    command:
+#      - '--config.file=/etc/prometheus/prometheus.yml'
+#      - '--storage.tsdb.path=/prometheus'
+#      - '--web.console.libraries=/etc/prometheus/console_libraries'
+#      - '--web.console.templates=/etc/prometheus/consoles'
+#    networks:
+#      - syncvault-network
+
+  # Grafana для дашбордов
+#  grafana:
+#    image: grafana/grafana:latest
+#    container_name: syncvault-grafana
+#    ports:
+#      - "3000:3000"
+#    environment:
+#      GF_SECURITY_ADMIN_PASSWORD: admin123
+#    volumes:
+#      - grafana_data:/var/lib/grafana
+#    networks:
+#      - syncvault-network
+
+  auth-service:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: auth-service
+    container_name: syncvault-auth
     ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
+      - "50056:50056"
+    environment:
+      - AUTH_SERVICE_PORT=50056
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - syncvault-network
 
-  # Grafana для дашбордов
-  grafana:
-    image: grafana/grafana:latest
-    container_name: syncvault-grafana
+  sync-service:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: sync-service
+    container_name: syncvault-sync
     ports:
-      - "3000:3000"
+      - "50053:50053"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin123
-    volumes:
-      - grafana_data:/var/lib/grafana
+      - SYNC_SERVICE_PORT=50053
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - syncvault-network
+
+  api-gateway:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: api-gateway
+    container_name: syncvault-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth-service
+      - sync-service
+    networks:
+      - syncvault-network
+
+  oauth-service:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: oauth-service
+    container_name: syncvault-oauth
+    ports:
+      - "50057:50057"
+    environment:
+      - OAUTH_SERVICE_PORT=50057
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - syncvault-network
 
@@ -99,8 +160,7 @@ volumes:
   postgres_data:
   redis_data:
   mongodb_data:
-  prometheus_data:
-  grafana_data:
+#  grafana_data:
 
 networks:
   syncvault-network:

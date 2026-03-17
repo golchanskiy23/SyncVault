@@ -38,14 +38,32 @@
 
 ## Быстрый старт
 
-### 1. Зависимости
+### Вариант 1: Docker (рекомендуется)
+
+```bash
+# Поднять инфраструктуру + все сервисы
+docker-compose up -d
+
+# Только инфраструктура (PostgreSQL, Redis, MongoDB)
+docker-compose up -d postgres redis mongodb
+```
+
+Сервисы после запуска:
+- `api-gateway` — `http://localhost:8080`
+- `auth-service` — `localhost:50056`
+- `sync-service` — `localhost:50053`
+- `oauth-service` — `http://localhost:8081`
+
+### Вариант 2: Локальный запуск
+
+#### 1. Зависимости
 
 ```bash
 # PostgreSQL + Redis
 docker-compose up -d postgres redis
 ```
 
-### 2. Конфигурация
+#### 2. Конфигурация
 
 ```bash
 cp internal/config/config.example.yml internal/config/config.yml
@@ -56,13 +74,13 @@ cp internal/config/config.example.yml internal/config/config.yml
 - `jwt.accessSecret` / `jwt.refreshSecret` — любые случайные строки
 - `oauth.google_drive.oauth.client_id` / `client_secret` — из Google Cloud Console
 
-### 3. Миграции
+#### 3. Миграции
 
 ```bash
 go run cmd/migrate/main.go
 ```
 
-### 4. Запуск сервера
+#### 4. Запуск сервера
 
 ```bash
 go run cmd/oauth-service/main.go
@@ -70,7 +88,7 @@ go run cmd/oauth-service/main.go
 
 Сервер стартует на `http://localhost:8081`.
 
-### 5. Запуск агента (для удалённых машин)
+#### 5. Запуск агента (для удалённых машин)
 
 На каждой удалённой машине в сети:
 
