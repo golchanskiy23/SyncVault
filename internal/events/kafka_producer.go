@@ -110,14 +110,9 @@ func (p *KafkaProducer) publishWithRetry(ctx context.Context, topic string, even
 			}
 		}
 
-		var key string
-		if getter, ok := event.(interface{ GetID() string }); ok {
-			key = getter.GetID()
-		}
-
 		msg := kafka.Message{
 			Topic: topic,
-			Key:   []byte(key),
+			Key:   []byte(eventID),
 			Value: data,
 			Time:  time.Now(),
 		}

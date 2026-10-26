@@ -12,6 +12,9 @@ type NodeInfo struct {
 	Type      string    // simple, google_drive, remote_simple
 	Endpoint  string    // адрес агента (если сетевой узел)
 	AccountID string    // для Google Drive
+	UserID    string    // владелец OAuth токена (для Google Drive)
+	FolderID  string    // корневая папка на Drive ("" — корень)
+	Root      string    // базовая папка агента на его устройстве
 	LastSeen  time.Time
 	Online    bool
 }
@@ -55,6 +58,17 @@ func (r *NodeRegistry) Unregister(id string) {
 	defer r.mu.Unlock()
 	delete(r.nodes, id)
 	delete(r.impls, id)
+}
+
+// Info возвращает описание узла по ID
+func (r *NodeRegistry) Info(id string) (NodeInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n, ok := r.nodes[id]
+	if !ok {
+		return NodeInfo{}, false
+	}
+	return *n, true
 }
 
 // Get возвращает реализацию узла по ID

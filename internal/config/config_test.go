@@ -140,14 +140,13 @@ shutdown:
 func TestLoadFromFile_NotExists(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadFromFile("nonexistent_file.yml")
-	if err == nil {
-		t.Error("Expected error for nonexistent file")
+	// Отсутствующий файл — не ошибка: LoadFromFile возвращает конфиг по умолчанию
+	cfg, err := LoadFromFile("nonexistent_file.yml")
+	if err != nil {
+		t.Fatalf("Expected no error for nonexistent file, got: %v", err)
 	}
-
-	// Проверяем что ошибка содержит имя файла
-	if !contains(err.Error(), "nonexistent_file.yml") {
-		t.Errorf("Error should contain filename, got: %v", err)
+	if cfg.HTTP.Port != Default().HTTP.Port {
+		t.Errorf("Expected default config, got HTTP port %d", cfg.HTTP.Port)
 	}
 }
 

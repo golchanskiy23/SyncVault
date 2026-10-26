@@ -1,0 +1,26 @@
+# systemd-юнит агента SyncVault (вариант без Docker).
+# Установка:
+#   sudo install -m 755 syncvault-agent /usr/local/bin/
+#   sudo cp syncvault-agent.service /etc/systemd/system/
+#   sudo systemctl edit syncvault-agent   # задать Environment= ниже под себя
+#   sudo systemctl enable --now syncvault-agent
+[Unit]
+Description=SyncVault agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=syncvault
+Environment=AGENT_ID=home-server
+# Базовая папка; связки создаются для её подпапок. Не задана — домашняя папка User
+Environment=AGENT_ROOT=/home/syncvault
+Environment=AGENT_PORT=9100
+Environment=AGENT_SERVER=192.168.1.10:8081
+Environment=AGENT_TOKEN=change-me
+# Environment=AGENT_ADVERTISE=http://100.64.0.2:9100
+ExecStart=/usr/local/bin/syncvault-agent
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -25,5 +25,6 @@ CREATE INDEX IF NOT EXISTS idx_sync_events_storage_node ON sync_events (storage_
 CREATE INDEX IF NOT EXISTS idx_sync_events_created_status ON sync_events (created_at DESC, status);
 
 -- Sessions indexes
-CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions (user_id, expires_at) 
-    WHERE expires_at > CURRENT_TIMESTAMP;
+-- Без предиката WHERE expires_at > CURRENT_TIMESTAMP: в предикате индекса
+-- допустимы только IMMUTABLE функции
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions (user_id, expires_at);

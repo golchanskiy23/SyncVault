@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"syncvault/internal/config"
@@ -352,22 +354,34 @@ func (s *OAuthService) DeleteToken(ctx context.Context, tokenID int64) error {
 	return nil
 }
 
-// GetAccountEmail получает email Google аккаунта по токену
+// GetAccountEmail получает email Google аккаунта по токену.
+// Используется Drive about.get: userinfo требует scope email, которого нет в конфиге,
+// а about доступен с любым drive-scope.
 func (s *OAuthService) GetAccountEmail(ctx context.Context, token *oauth2.Token) (string, error) {
 	client := s.oauth2.Client(ctx, token)
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	resp, err := client.Get("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)")
 	if err != nil {
-		return "", fmt.Errorf("failed to get userinfo: %w", err)
+		return "", fmt.Errorf("failed to get drive about: %w", err)
 	}
 	defer resp.Body.Close()
 
-	var info struct {
-		Email string `json:"email"`
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("drive about returned %s: %s", resp.Status, body)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return "", fmt.Errorf("failed to decode userinfo: %w", err)
+
+	var about struct {
+		User struct {
+			EmailAddress string `json:"emailAddress"`
+		} `json:"user"`
 	}
-	return info.Email, nil
+	if err := json.NewDecoder(resp.Body).Decode(&about); err != nil {
+		return "", fmt.Errorf("failed to decode drive about: %w", err)
+	}
+	if about.User.EmailAddress == "" {
+		return "", fmt.Errorf("drive about returned empty email")
+	}
+	return about.User.EmailAddress, nil
 }
 
 // CleanupExpiredStates очищает истекшие состояния

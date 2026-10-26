@@ -94,3 +94,13 @@ kafka:
   retryBackoff: 1s
   batchSize: 100
   batchTimeout: 1s
+
+sync:
+  # Период фоновой синхронизации всех узлов: "1h", "30m". "off" — выключить
+  interval: "1h"
+  # Общий секрет для агентов на других устройствах (cmd/agent --token).
+  # Сгенерировать: openssl rand -hex 32
+  agentToken: ""
+  # Папка этого компьютера, внутри которой выбираются папки для связок (устройство "local").
+  # В Docker задаётся через SYNC_LOCAL_ROOT в .env
+  localRoot: ""

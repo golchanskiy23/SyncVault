@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"time"
 )
 
 // FileEntry — минимальное представление файла для построения дерева
@@ -11,6 +12,9 @@ type FileEntry struct {
 	Path string
 	Hash string // SHA-256 содержимого
 	Size int64
+	// ModTime — время изменения, если хранилище его отдаёт (иначе нулевое).
+	// В хеш дерева не входит.
+	ModTime time.Time
 }
 
 // MerkleNode — узел дерева

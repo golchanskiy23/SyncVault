@@ -47,7 +47,8 @@ func TestGridFSAdapterWithMongoDB(t *testing.T) {
 	require.NoError(t, err, "Failed to clean up test database")
 
 	// Create GridFS adapter
-	gridfsAdapter := storage.NewGridFSAdapter(db, "test_files")
+	gridfsAdapter, err := storage.NewGridFSAdapter(db, "test_files")
+	require.NoError(t, err, "Failed to create GridFS adapter")
 
 	// Test connection
 	err = gridfsAdapter.Connect(ctx)
@@ -224,7 +225,8 @@ func TestGridFSAdapterConcurrentIntegration(t *testing.T) {
 	db := client.Database("syncvault_gridfs_concurrent_test")
 	defer db.Drop(ctx) // Clean up after test
 
-	gridfsAdapter := storage.NewGridFSAdapter(db, "concurrent_test")
+	gridfsAdapter, err := storage.NewGridFSAdapter(db, "concurrent_test")
+	require.NoError(t, err, "Failed to create GridFS adapter")
 
 	// Test concurrent file operations
 	t.Run("ConcurrentOperations", func(t *testing.T) {
@@ -298,7 +300,8 @@ func TestGridFSAdapterMetadata(t *testing.T) {
 	db := client.Database("syncvault_gridfs_metadata_test")
 	defer db.Drop(ctx) // Clean up after test
 
-	gridfsAdapter := storage.NewGridFSAdapter(db, "metadata_test")
+	gridfsAdapter, err := storage.NewGridFSAdapter(db, "metadata_test")
+	require.NoError(t, err, "Failed to create GridFS adapter")
 
 	t.Run("MetadataHandling", func(t *testing.T) {
 		filePath := valueobjects.FilePathFromString("test/metadata.txt")
@@ -341,7 +344,8 @@ func BenchmarkGridFSAdapter(b *testing.B) {
 	db := client.Database("syncvault_gridfs_benchmark_test")
 	defer db.Drop(ctx) // Clean up after test
 
-	gridfsAdapter := storage.NewGridFSAdapter(db, "benchmark_test")
+	gridfsAdapter, err := storage.NewGridFSAdapter(db, "benchmark_test")
+	require.NoError(b, err, "Failed to create GridFS adapter")
 
 	b.Run("PutFile", func(b *testing.B) {
 		b.ResetTimer()

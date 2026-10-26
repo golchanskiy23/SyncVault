@@ -1,438 +1,268 @@
 # SyncVault
 
-Система синхронизации файлов между разнородными хранилищами через центральный сервер (middleware).
+Фоновая синхронизация папок между вашим компьютером, другими Linux-устройствами/серверами и Google Drive.
 
-Поддерживаемые хранилища:
-- **SimpleStorage** — любая машина с ОС (Linux, macOS, Windows) с доступом к файловой системе
-- **ComplexStorage** — специализированные API-хранилища (Google Drive, S3, Dropbox и т.д.)
-- **RemoteNode** — удалённая машина в сети, на которой запущен агент SyncVault
+Сервер запускается на вашем компьютере в Docker. Вы создаёте **связки** — «папка здесь ↔ папка там», —
+и сервер синхронизирует каждую связку раз в `sync.interval` (по умолчанию раз в час) в обе стороны.
+
+Стороны связки:
+- **local** — папка этого компьютера (внутри `SYNC_LOCAL_ROOT`)
+- **агент** — папка на другом Linux-устройстве или сервере, где запущен агент SyncVault
+- **Google Drive** — папка на Drive подключённого аккаунта
 
 Синхронизация работает через алгоритм:
-1. **MerkleTree** — быстро находит расходящиеся файлы между двумя узлами
-2. **VectorClock** — определяет кто новее при конфликте
-3. **SyncEngine** — применяет стратегию разрешения конфликтов (KeepNewest / KeepSource / KeepBoth)
+1. **MerkleTree** — быстро находит расходящиеся файлы между двумя сторонами
+2. **VectorClock** — определяет, где файл изменился после прошлой синхронизации
+3. **SyncEngine** — копирует изменения, распространяет удаления, разрешает конфликты (KeepNewest / KeepSource / KeepBoth)
 
 ---
 
 ## Архитектура
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   SyncVault Server                       │
-│                  (oauth-service :8081)                   │
-│                                                          │
-│  NodeRegistry ──► SyncEngine ──► MerkleTree + VectorClock│
-│       │                                                  │
-│  ┌────┴──────────────────────────────────┐               │
-│  │  Node (интерфейс)                     │               │
-│  │  ├── SimpleStorage  (локальная ОС)    │               │
-│  │  ├── ComplexStorage (Google Drive...) │               │
-│  │  └── HTTPAgentNode  (удалённая машина)│               │
-│  └───────────────────────────────────────┘               │
-└─────────────────────────────────────────────────────────┘
+ ваш компьютер (Docker)                              другие устройства
+┌───────────────────────────────────────────┐
+│ auth-service :50056  — вход, JWT          │
+│ oauth-service :8081                       │        ┌──────────────────────┐
+│   Scheduler (раз в sync.interval)         │  HTTP  │ agent :9100          │
+│     └─► PairManager ─► SyncEngine         │◄──────►│  базовая папка, напр.│
+│           связка = Node A ↔ Node B        │ токен  │  /home/user          │
+│           ├── SimpleStorage (local)       │        └──────────────────────┘
+│           ├── HTTPRemoteNode (агент)      │
+│           └── ComplexStorage (Drive) ─────┼──────► Google Drive API
+│ postgres — устройства, связки, состояние  │
+└───────────────────────────────────────────┘
 ```
 
-Все хранилища регистрируются в `NodeRegistry`. `SyncEngine` работает только с интерфейсом `Node` — он не знает что за ним стоит.
+Сервер сам ходит к агентам, поэтому порт агента должен быть доступен с компьютера сервера:
+в локальной сети — напрямую, вне её — через Tailscale (см. ниже). Хостинг не нужен.
 
 ---
 
 ## Быстрый старт
 
-### Вариант 1: Docker (рекомендуется)
-
-```bash
-# Поднять инфраструктуру + все сервисы
-docker-compose up -d
-
-# Только инфраструктура (PostgreSQL, Redis, MongoDB)
-docker-compose up -d postgres redis mongodb
-```
-
-Сервисы после запуска:
-- `api-gateway` — `http://localhost:8080`
-- `auth-service` — `localhost:50056`
-- `sync-service` — `localhost:50053`
-- `oauth-service` — `http://localhost:8081`
-
-### Вариант 2: Локальный запуск
-
-#### 1. Зависимости
-
-```bash
-# PostgreSQL + Redis
-docker-compose up -d postgres redis
-```
-
-#### 2. Конфигурация
+### 1. Конфигурация
 
 ```bash
 cp internal/config/config.example.yml internal/config/config.yml
+cp .env.example .env
 ```
 
-Заполнить в `config.yml`:
-- `database.password` — пароль PostgreSQL
+В `internal/config/config.yml`:
 - `jwt.accessSecret` / `jwt.refreshSecret` — любые случайные строки
-- `oauth.google_drive.oauth.client_id` / `client_secret` — из Google Cloud Console
+- `sync.agentToken` — общий секрет для агентов: `openssl rand -hex 32`
+- `sync.interval` — период фоновой синхронизации (`1h`, `30m`, `off`)
+- для Google Drive: `oauth.google_drive.oauth.client_id` / `client_secret` из Google Cloud Console,
+  scope `https://www.googleapis.com/auth/drive`
 
-#### 3. Миграции
+В `.env`:
+- `SYNC_LOCAL_ROOT` — папка этого компьютера, внутри которой выбираются папки для связок,
+  например `/home/bloom/test-sync`. Монтируется в контейнер по тому же пути.
+- `UID` / `GID` — ваш пользователь (`id -u`, `id -g`), чтобы файлы создавались не от root
 
-```bash
-go run cmd/migrate/main.go
-```
-
-#### 4. Запуск сервера
-
-```bash
-go run cmd/oauth-service/main.go
-```
-
-Сервер стартует на `http://localhost:8081`.
-
-#### 5. Запуск агента (для удалённых машин)
-
-На каждой удалённой машине в сети:
+### 2. Запуск
 
 ```bash
-go run cmd/agent/main.go --port 9100 --root /path/to/sync/folder
+docker compose up -d --build
+docker compose logs -f oauth-service   # логи синхронизации
 ```
+
+Поднимаются `postgres`, `redis`, `migrate` (применяет миграции и завершается), `auth-service`
+и `oauth-service`. Сервисы перезапускаются сами (`restart: unless-stopped`), в том числе после
+перезагрузки. Порты PostgreSQL/Redis наружу не публикуются — не конфликтуют с локально установленными.
+Консоль БД: `docker compose exec postgres psql -U postgres -d syncvault`.
+
+`docker compose --profile extra up -d` дополнительно поднимает `api-gateway`, `sync-service` и
+`mongodb` — для синхронизации они не нужны.
+
+Если том `postgres_data` остался от старой версии и `migrate` падает на существующих таблицах,
+пересоздайте его: `docker compose down -v` (удаляет данные БД в контейнере).
+
+### 3. Аккаунт
+
+```bash
+# Регистрация (один раз). Пароль: от 8 символов, заглавная и строчная буква, цифра и спецсимвол
+curl -s -X POST http://localhost:50056/register -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"<пароль>"}'
+
+# Вход — токен действует 15 минут
+TOKEN=$(curl -s -X POST http://localhost:50056/login -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"<пароль>"}' | jq -r '.access_token')
+H=(-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
+```
+
+### 4. Устройства и связки
+
+```bash
+# Устройства: local (этот компьютер) и подключённые агенты
+curl -s "${H[@]}" localhost:8081/sync/devices | jq
+
+# Выбрать папку на устройстве — просмотр подпапок
+curl -s "${H[@]}" "localhost:8081/sync/devices/home-server/dirs?path=projects" | jq
+
+# Связка: папка этого компьютера ↔ папка на устройстве
+curl -s "${H[@]}" -X POST localhost:8081/sync/pairs -d '{
+  "name": "docs",
+  "a": {"device": "local",       "path": "/home/bloom/test-sync/docs"},
+  "b": {"device": "home-server", "path": "projects/docs"}
+}' | jq
+
+# Связки и их статус (время, сколько передано/удалено, последняя ошибка)
+curl -s "${H[@]}" localhost:8081/sync/pairs | jq
+```
+
+Дальше связки синхронизируются в фоне. Синхронизировать сейчас: `POST /sync/pairs/{id}/run`
+(одну) или `POST /sync/pairs/run` (все).
 
 ---
 
-## Получение JWT токена
+## Подключение других устройств
 
-Все `/sync/*` и `/drive/*` эндпоинты требуют JWT. Для тестирования используются хардкод-учётные данные:
+На каждое Linux-устройство или сервер ставится агент — один на устройство. Он открывает серверу
+**базовую папку** (по умолчанию домашнюю), а конкретные папки для связок выбираются с сервера.
+Доступ к агенту — только с `sync.agentToken`; выйти за пределы базовой папки нельзя.
+Агент сам регистрируется на сервере, шлёт heartbeat и переподключается после перезапусков.
 
+**Вариант A — Docker** (на устройстве нужна копия репозитория):
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8081/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"password123"}' \
-  | jq -r '.access_token')
+cp deploy/agent/.env.example deploy/agent/.env   # AGENT_ID, AGENT_DATA_DIR, AGENT_SERVER, AGENT_TOKEN
+docker compose -f deploy/agent/docker-compose.yml up -d --build
 ```
+
+**Вариант B — бинарник + systemd** (без Go и Docker на устройстве):
+```bash
+make agent                                     # на вашем компьютере: bin/syncvault-agent-{amd64,arm64}
+scp bin/syncvault-agent-amd64 server:/tmp/syncvault-agent
+# на устройстве — см. deploy/agent/syncvault-agent.service
+```
+
+Или вручную:
+```bash
+./syncvault-agent --id home-server --server 192.168.1.10:8081 --token <sync.agentToken>
+# --root /srv  — другая базовая папка (по умолчанию домашняя)
+```
+
+`--server` — адрес компьютера с сервером в локальной сети (`ip -br addr`, интерфейс Wi-Fi/Ethernet).
+На устройстве должен быть открыт порт агента (9100), на компьютере с сервером — 8081.
+
+### Устройства вне домашней сети
+
+Устройства за другим роутером напрямую недоступны. Поставьте [Tailscale](https://tailscale.com)
+(или ZeroTier) на компьютер с сервером и на эти устройства — они получат адреса `100.x.y.z`
+и будут видны друг другу как в одной сети. Агенту указываются адреса из Tailscale:
+```bash
+./syncvault-agent --id vps --token <...> --server 100.64.0.1:8081 --advertise http://100.64.0.2:9100
+```
+
+### Если устройство выключено
+
+Связки с недоступным устройством получают `last_status: "error"`, остальные синхронизируются.
+Когда устройство снова в сети, следующий проход догонит изменения.
 
 ---
 
-## Способы синхронизации
+## Связки
 
-### Случай 1: Локальная папка ↔ Локальная папка
+### Стороны
 
-Синхронизация двух папок на одной машине (или двух машин с общим NFS).
+| Сторона | Пример | Путь |
+|---|---|---|
+| Этот компьютер | `{"device": "local", "path": "/home/bloom/test-sync/docs"}` | абсолютный внутри `SYNC_LOCAL_ROOT` или относительно него |
+| Агент | `{"device": "home-server", "path": "projects/docs"}` | относительно базовой папки агента или абсолютный внутри неё |
+| Google Drive | `{"drive": "user@gmail.com", "folder_id": "<ID папки>"}` | `folder_id` — из URL `drive.google.com/drive/folders/<ID>`; без него — корень Drive |
+
+При создании связки проверяется, что папки существуют, лежат внутри разрешённых корней и не
+совпадают/не вложены друг в друга. Папки на устройствах должны существовать заранее.
+Каждая связка синхронизируется независимо: файлы разных связок не смешиваются.
+Одну папку можно связать с несколькими устройствами — это разные связки.
+
+### Google Drive
 
 ```bash
-# Регистрируем первую папку
-curl -X POST http://localhost:8081/sync/nodes/local \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "folder-a", "root_path": "/home/user/docs"}'
-
-# Регистрируем вторую папку
-curl -X POST http://localhost:8081/sync/nodes/local \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "folder-b", "root_path": "/home/user/backup"}'
-
-# Синхронизируем
-curl -X POST http://localhost:8081/sync/run \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"source_id": "folder-a", "target_id": "folder-b"}'
+# 1. Ваш user_id
+curl -s localhost:50056/profile -H "Authorization: Bearer $TOKEN" | jq -r .id
+# 2. В браузере: http://localhost:8081/auth/google?user_id=<ваш user_id>
+# 3. Связка
+curl -s "${H[@]}" -X POST localhost:8081/sync/pairs -d '{
+  "name": "backup",
+  "a": {"device": "local", "path": "/home/bloom/test-sync/docs"},
+  "b": {"drive": "user@gmail.com", "folder_id": "<ID папки>"}
+}'
 ```
+
+- Токен Drive берётся у текущего пользователя — чужой Drive подключить нельзя.
+- Google Docs/Sheets/Slides не синхронизируются (их нельзя скачать как файл).
+- Удалённые файлы попадают в корзину Drive (восстанавливаются 30 дней).
+- Со scope `drive.file` изменять и удалять можно только файлы, созданные SyncVault —
+  для полной синхронизации нужен scope `https://www.googleapis.com/auth/drive`.
+
+### Изменить связку
+
+Связку нельзя изменить — удалите (`DELETE /sync/pairs/{id}`, файлы в папках остаются) и создайте
+заново. Состояние синхронизации при этом начинается с нуля.
 
 ---
 
-### Случай 2: Локальная папка ↔ Google Drive
+## Как синхронизируются изменения
 
-Файлы с локальной машины синхронизируются с Google Drive аккаунтом.
-
-```bash
-# Шаг 1: подключить Google аккаунт через OAuth
-# Открыть в браузере:
-# http://localhost:8081/auth/google?user_id=user_123
-
-# Шаг 2: зарегистрировать локальную папку
-curl -X POST http://localhost:8081/sync/nodes/local \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "laptop-home", "root_path": "/home/user/documents"}'
-
-# Шаг 3: зарегистрировать Google Drive как узел
-curl -X POST http://localhost:8081/sync/nodes/drive \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "drive-main", "account_id": "user@gmail.com", "user_id": "user_123"}'
-
-# Шаг 4: синхронизировать
-curl -X POST http://localhost:8081/sync/run \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"source_id": "laptop-home", "target_id": "drive-main"}'
-```
-
-Поток данных:
-```
-/home/user/documents  ──►  SyncVault Server  ──►  Google Drive
-     (SimpleStorage)           (tmpDir)          (ComplexStorage)
-```
-
----
-
-### Случай 3: Google Drive ↔ Google Drive (два аккаунта)
-
-Синхронизация между двумя Google аккаунтами. Данные проходят через сервер как middleware.
-
-```bash
-# Подключить оба аккаунта через OAuth (в браузере):
-# http://localhost:8081/auth/google?user_id=user_123
-# (войти под первым аккаунтом, затем повторить под вторым)
-
-# Зарегистрировать первый аккаунт
-curl -X POST http://localhost:8081/sync/nodes/drive \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "drive-account1", "account_id": "first@gmail.com", "user_id": "user_123"}'
-
-# Зарегистрировать второй аккаунт
-curl -X POST http://localhost:8081/sync/nodes/drive \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "drive-account2", "account_id": "second@gmail.com", "user_id": "user_123"}'
-
-# Синхронизировать
-curl -X POST http://localhost:8081/sync/run \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"source_id": "drive-account1", "target_id": "drive-account2"}'
-```
-
-Поток данных:
-```
-Google Drive (account1)  ──►  SyncVault Server  ──►  Google Drive (account2)
-    (ComplexStorage)              (tmpDir)               (ComplexStorage)
-```
-
----
-
-### Случай 4: Удалённая машина ↔ Любое хранилище
-
-Машина B в локальной сети регистрирует себя через агент. Сервер синхронизирует её с любым другим узлом.
-
-**На машине B:**
-```bash
-go run cmd/agent/main.go --port 9100 --root /home/user/sync
-```
-
-**На сервере:**
-```bash
-# Зарегистрировать удалённую машину
-curl -X POST http://localhost:8081/sync/nodes/remote \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "laptop-b", "endpoint": "http://192.168.1.10:9100"}'
-
-# Зарегистрировать локальную папку на сервере
-curl -X POST http://localhost:8081/sync/nodes/local \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "server-storage", "root_path": "/var/syncvault/data"}'
-
-# Синхронизировать
-curl -X POST http://localhost:8081/sync/run \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"source_id": "server-storage", "target_id": "laptop-b"}'
-```
-
----
-
-### Случай 5: Полная синхронизация всех узлов в сети
-
-Все зарегистрированные узлы синхронизируются между собой (полный граф).
-
-```bash
-# Предварительно зарегистрировать все нужные узлы (случаи 1-4 выше)
-
-# Запустить полную синхронизацию
-curl -X POST http://localhost:8081/sync/run/all \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Пример сети из 4 узлов:
-```
-laptop-home ──────────────── drive-main
-     │    ╲                ╱    │
-     │      ╲            ╱      │
-     │        server-nas        │
-     │      ╱            ╲      │
-     │    ╱                ╲    │
-laptop-b ──────────────── drive-backup
-```
-
-`SyncAll` синхронизирует все пары: `N*(N-1)/2` операций. При 4 узлах — 6 пар.
-
----
-
-## Управление узлами
-
-### Список зарегистрированных узлов
-
-```bash
-curl http://localhost:8081/sync/nodes \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Ответ:
-```json
-{
-  "count": 3,
-  "nodes": [
-    {"ID": "laptop-home", "Type": "simple",       "Endpoint": "/home/user/docs", "Online": true},
-    {"ID": "drive-main",  "Type": "google_drive", "AccountID": "user@gmail.com", "Online": true},
-    {"ID": "laptop-b",    "Type": "remote_simple", "Endpoint": "http://192.168.1.10:9100", "Online": true}
-  ]
-}
-```
-
-### Удалить узел
-
-```bash
-curl -X DELETE http://localhost:8081/sync/nodes/laptop-b \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### Heartbeat (агент сообщает что жив)
-
-```bash
-curl -X POST http://localhost:8081/sync/nodes/heartbeat \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"node_id": "laptop-b"}'
-```
-
----
-
-## Google Drive: прямые операции
-
-Помимо синхронизации через SyncEngine, доступны прямые операции с Drive.
-
-### Список подключённых аккаунтов
-
-```bash
-curl http://localhost:8081/drive/accounts \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### Скачать папку с Drive на локальный путь
-
-```bash
-curl -X POST http://localhost:8081/drive/sync/download \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"folder_id": "1akCM2ejRZ7zP8IjIYDLIE_OjMZkiqOQ3", "local_path": "/home/user/downloads"}'
-```
-
-### Загрузить локальную папку на Drive
-
-```bash
-curl -X POST http://localhost:8081/drive/sync/upload \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"local_path": "/home/user/documents", "folder_id": "1akCM2ejRZ7zP8IjIYDLIE_OjMZkiqOQ3"}'
-```
-
-### Синхронизировать Drive → Drive (прямой метод без MerkleTree)
-
-```bash
-curl -X POST http://localhost:8081/drive/sync/drive-to-drive \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "src_account":   "first@gmail.com",
-    "src_folder_id": "FOLDER_ID_SOURCE",
-    "dst_account":   "second@gmail.com",
-    "dst_folder_id": "FOLDER_ID_DEST"
-  }'
-```
-
-> Отличие от `/sync/run`: этот метод копирует всё подряд без сравнения. `/sync/run` использует MerkleTree и копирует только изменения.
-
----
-
-## Разрешение конфликтов
-
-При одновременном изменении файла на двух узлах VectorClock определяет конфликт. Стратегия задаётся при старте сервера в `cmd/oauth-service/main.go`:
+- Файл изменился только на одной стороне — копируется на другую.
+- Файл изменился на обеих сторонах — конфликт, решается стратегией (задаётся в `cmd/oauth-service/main.go`):
 
 | Стратегия | Поведение |
 |-----------|-----------|
 | `KeepNewest` | Побеждает файл с более поздним временем изменения (по умолчанию) |
-| `KeepSource` | Всегда побеждает источник синхронизации |
-| `KeepBoth` | Оба файла сохраняются: оригинал + `filename.conflict.nodeID` |
+| `KeepSource` | Всегда побеждает сторона `a` |
+| `KeepBoth` | На обеих сторонах — версия `b`, версия `a` сохраняется как `filename.conflict.<id стороны>` |
 
----
+- Файл удалён на одной стороне, а на другой не менялся — удаляется и там. Если его изменили после
+  удаления на другой стороне — изменённая версия восстанавливается.
+- Защита от массового удаления: если сторона вдруг оказалась пустой, хотя раньше на ней было больше
+  10 синхронизированных файлов (например, не примонтирован диск), синхронизация связки отменяется.
+  Если файлы удалены намеренно — пересоздайте связку.
 
-## Полный пример: синхронизация всей сети
-
-Сценарий: ноутбук дома, ноутбук в офисе, Google Drive как резервная копия.
-
-```bash
-# 1. Запустить агент на ноутбуке в офисе (192.168.1.20)
-#    (выполнить на той машине)
-go run cmd/agent/main.go --port 9100 --root /home/user/work
-
-# 2. На сервере — зарегистрировать все узлы
-TOKEN="..."  # получить через /auth/login
-
-# Локальная папка на сервере
-curl -X POST http://localhost:8081/sync/nodes/local \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "server-home", "root_path": "/var/syncvault/home"}'
-
-# Ноутбук в офисе (агент)
-curl -X POST http://localhost:8081/sync/nodes/remote \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "office-laptop", "endpoint": "http://192.168.1.20:9100"}'
-
-# Google Drive (предварительно авторизоваться через браузер)
-curl -X POST http://localhost:8081/sync/nodes/drive \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"id": "drive-backup", "account_id": "user@gmail.com", "user_id": "user_123"}'
-
-# 3. Проверить что все узлы онлайн
-curl http://localhost:8081/sync/nodes \
-  -H "Authorization: Bearer $TOKEN"
-
-# 4. Запустить полную синхронизацию всех узлов
-curl -X POST http://localhost:8081/sync/run/all \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Результат: все три узла (`server-home`, `office-laptop`, `drive-backup`) будут содержать одинаковый набор файлов. Синхронизируются только изменившиеся файлы (MerkleTree diff).
+Состояние синхронизации хранится в PostgreSQL (`sync_file_states`) и переживает перезапуски.
 
 ---
 
 ## Справочник API
 
+`oauth-service` (`http://localhost:8081`), все `/sync/*` и `/drive/*` — с JWT:
+
 | Метод | Путь | Описание |
 |-------|------|----------|
-| `POST` | `/sync/nodes/local` | Зарегистрировать локальную папку |
-| `POST` | `/sync/nodes/remote` | Зарегистрировать удалённую машину (агент) |
-| `POST` | `/sync/nodes/drive` | Зарегистрировать Google Drive аккаунт |
-| `POST` | `/sync/nodes/heartbeat` | Обновить статус узла |
-| `GET` | `/sync/nodes` | Список всех узлов |
-| `DELETE` | `/sync/nodes/{id}` | Удалить узел |
-| `POST` | `/sync/run` | Синхронизировать два узла |
-| `POST` | `/sync/run/all` | Синхронизировать все узлы |
-| `GET` | `/auth/google` | Начать OAuth flow для Google Drive |
-| `GET` | `/auth/google/callback` | OAuth callback |
-| `GET` | `/drive/accounts` | Список подключённых Google аккаунтов |
-| `GET` | `/drive/files` | Список файлов на Drive |
+| `GET` | `/sync/devices` | Устройства: `local` и агенты (online, last_seen) |
+| `GET` | `/sync/devices/{id}/dirs?path=` | Подпапки папки на устройстве |
+| `DELETE` | `/sync/devices/{id}` | Удалить агента (если он не используется в связках) |
+| `GET` | `/sync/pairs` | Связки и статус последней синхронизации |
+| `POST` | `/sync/pairs` | Создать связку |
+| `DELETE` | `/sync/pairs/{id}` | Удалить связку |
+| `POST` | `/sync/pairs/{id}/run` | Синхронизировать связку сейчас |
+| `POST` | `/sync/pairs/run` | Синхронизировать все связки сейчас |
+| `POST` | `/sync/agents/register` | Агент регистрирует себя (`X-Agent-Token`) |
+| `POST` | `/sync/agents/heartbeat` | Heartbeat агента (`X-Agent-Token`) |
+| `GET` | `/auth/google?user_id=` | Подключить Google аккаунт |
+| `GET` | `/drive/accounts` | Подключённые Google аккаунты |
+| `GET` | `/drive/files` | Файлы на Drive |
 | `POST` | `/drive/sync/download` | Скачать папку с Drive |
 | `POST` | `/drive/sync/upload` | Загрузить папку на Drive |
-| `POST` | `/drive/sync/drive-to-drive` | Синхронизировать два Drive аккаунта напрямую |
-| `POST` | `/drive/sync` | Синхронизировать метаданные Drive в БД |
-| `GET` | `/drive/sync/status` | Статус последней синхронизации |
+| `POST` | `/drive/sync/drive-to-drive` | Скопировать папку между двумя Drive аккаунтами |
 | `GET` | `/health` | Health check |
+
+`auth-service` (`http://localhost:50056`): `POST /register`, `POST /login`, `POST /refresh`, `GET /profile`.
+
+---
+
+## Разработка без Docker
+
+```bash
+DATABASE_URL="postgres://postgres:<пароль>@localhost:5432/syncvault?sslmode=disable" \
+  go run ./tools/migrate up
+SYNC_LOCAL_ROOT=/home/bloom/test-sync go run ./cmd/oauth-service
+go run ./cmd/auth-service
+go test ./internal/sync/...
+```
+
+`go run ./tools/migrate version` — версия БД. Внимание: `down` без аргументов откатывает **все** миграции.
 
 ---
 
@@ -440,30 +270,26 @@ curl -X POST http://localhost:8081/sync/run/all \
 
 ```
 cmd/
-  oauth-service/   — основной сервер (порт 8081)
-  agent/           — агент для удалённых машин (порт 9100)
-  auth-service/    — сервис аутентификации (порт 8080)
+  oauth-service/   — сервер синхронизации (порт 8081)
+  auth-service/    — вход и регистрация (порт 50056)
+  agent/           — агент для других устройств (порт 9100)
+tools/migrate/     — миграции БД
+deploy/agent/      — запуск агента: docker-compose и systemd-юнит
 
 internal/
   sync/
-    engine.go      — SyncEngine: MerkleTree + VectorClock
+    pairs.go       — связки: проверка сторон, запуск синхронизации, статус
+    scheduler.go   — фоновая синхронизация связок раз в sync.interval
+    engine.go      — SyncEngine: MerkleTree + VectorClock, удаления, конфликты
     node.go        — Node интерфейс, SimpleStorage, ComplexStorage
-    handlers.go    — HTTP API для управления узлами
-    registry.go    — NodeRegistry: реестр всех узлов
-    merkletree.go  — построение дерева и поиск diff
-    vectorclock.go — векторные часы для разрешения конфликтов
-    pgstore.go     — PostgreSQL StateStore
-    adapters/
-      googledrive.go — ComplexStorageAPI для Google Drive
-    agent/
-      http_agent.go  — HTTPAgentNode: удалённый узел через HTTP
-      agent.go       — агент-сервер для удалённых машин
+    remote_node.go — HTTPRemoteNode: папка на устройстве через HTTP API агента
+    handlers.go    — HTTP API устройств, связок и агентов
+    registry.go    — реестр подключённых агентов
+    pgstore.go     — PostgreSQL: состояние файлов, устройства, связки
+    adapters/googledrive.go — ComplexStorageAPI для Google Drive
+    agent/http_agent.go     — агент: HTTP API базовой папки устройства
 
-  oauth/google/
-    handlers.go    — OAuth flow + прямые Drive операции
-    drive.go       — DriveAdapter (Google Drive API)
-    service.go     — OAuthService (токены, PKCE)
-
-  config/
-    config.example.yml — шаблон конфигурации
+  auth/            — JWT, пользователи (user_store.go)
+  oauth/google/    — OAuth flow, DriveAdapter, прямые операции с Drive
+  config/          — конфигурация (config.example.yml — шаблон)
 ```

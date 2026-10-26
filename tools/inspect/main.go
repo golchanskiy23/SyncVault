@@ -364,12 +364,12 @@ func inspectTable(ctx context.Context, pool *pgxpool.Pool, tableName string, lim
 			pg_size_pretty(pg_relation_size($1::regclass)) as table_size,
 			pg_size_pretty(pg_total_relation_size($1::regclass) - pg_relation_size($1::regclass)) as index_size,
 			(SELECT COUNT(*) FROM %s) as row_count
-	`, tableName, tableName)
+	`, tableName)
 
 	var totalSize, tableSize, indexSize string
 	var rowsCount int64
 
-	err = pool.QueryRow(ctx, statsQuery).Scan(&totalSize, &tableSize, &indexSize, &rowsCount)
+	err = pool.QueryRow(ctx, statsQuery, tableName).Scan(&totalSize, &tableSize, &indexSize, &rowsCount)
 	if err == nil {
 		fmt.Printf("Total Size: %s\n", totalSize)
 		fmt.Printf("Table Size: %s\n", tableSize)

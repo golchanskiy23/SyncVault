@@ -86,6 +86,10 @@ func (p *WorkerPool) worker(id int) {
 
 // Submit добавляет задачу в очередь
 func (p *WorkerPool) Submit(task Task) error {
+	// RLock не даёт Stop закрыть канал между проверкой stopped и отправкой
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	if atomic.LoadInt32(&p.stopped) != 0 {
 		return ErrPoolStopped
 	}
@@ -108,7 +112,10 @@ func (p *WorkerPool) Stop() {
 		atomic.StoreInt32(&p.stopped, 1)
 		p.cancel()
 		p.wg.Wait()
+		// cancel() выше разблокирует Submit, ждущие на полной очереди
+		p.mu.Lock()
 		close(p.taskQueue)
+		p.mu.Unlock()
 	})
 }
 

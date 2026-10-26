@@ -403,6 +403,8 @@ func (d *DriveAdapter) convertDriveFile(file *drive.File) *GoogleDriveFile {
 		ModifiedTime: parseTime(file.ModifiedTime),
 		Parents:      file.Parents,
 		WebViewLink:  file.WebViewLink,
+
+		Sha256Checksum: file.Sha256Checksum,
 	}
 }
 
@@ -431,28 +433,44 @@ func (d *DriveAdapter) getDriveServiceByAccount(ctx context.Context, userID, acc
 	return drive.NewService(ctx, option.WithHTTPClient(client))
 }
 
-// ListFilesByAccount список файлов для конкретного аккаунта
+// byAccountFileFields — поля файла, запрашиваемые методами *ByAccount
+const byAccountFileFields = "id,name,mimeType,size,sha256Checksum,createdTime,modifiedTime,parents,webViewLink"
+
+// ListFilesByAccount возвращает все файлы папки folderID ("root" — корень Drive) для конкретного аккаунта.
+// pageSize — размер страницы запроса; результат собирается со всех страниц.
 func (d *DriveAdapter) ListFilesByAccount(ctx context.Context, userID, accountID, folderID string, pageSize int64) (*GoogleDriveResponse, error) {
 	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
-	query := "trashed=false"
-	if folderID != "" {
-		query += fmt.Sprintf(" and '%s' in parents", folderID)
+	if folderID == "" {
+		folderID = "root"
 	}
-	fileList, err := service.Files.List().
-		Q(query).
-		Fields("nextPageToken", "files(id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink)").
-		PageSize(pageSize).Do()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list files: %w", err)
+	query := fmt.Sprintf("trashed=false and '%s' in parents", escapeQuery(folderID))
+
+	result := &GoogleDriveResponse{}
+	pageToken := ""
+	for {
+		call := service.Files.List().
+			Context(ctx).
+			Q(query).
+			Fields("nextPageToken", googleapi.Field("files("+byAccountFileFields+")")).
+			PageSize(pageSize)
+		if pageToken != "" {
+			call = call.PageToken(pageToken)
+		}
+		fileList, err := call.Do()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list files: %w", err)
+		}
+		for _, f := range fileList.Files {
+			result.Files = append(result.Files, *d.convertDriveFile(f))
+		}
+		pageToken = fileList.NextPageToken
+		if pageToken == "" {
+			return result, nil
+		}
 	}
-	result := &GoogleDriveResponse{Files: make([]GoogleDriveFile, 0, len(fileList.Files)), NextPageToken: fileList.NextPageToken}
-	for _, f := range fileList.Files {
-		result.Files = append(result.Files, *d.convertDriveFile(f))
-	}
-	return result, nil
 }
 
 // DownloadFileByAccount скачивает файл используя конкретный аккаунт
@@ -489,10 +507,11 @@ func (d *DriveAdapter) UploadFileByAccount(ctx context.Context, userID, accountI
 		return nil, err
 	}
 	defer f.Close()
-	uploaded, err := service.Files.Create(&drive.File{
-		Name:    filepath.Base(localPath),
-		Parents: []string{folderID},
-	}).Media(f).Fields("id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink").Do()
+	file := &drive.File{Name: filepath.Base(localPath)}
+	if folderID != "" {
+		file.Parents = []string{folderID}
+	}
+	uploaded, err := service.Files.Create(file).Context(ctx).Media(f).Fields(byAccountFileFields).Do()
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload: %w", err)
 	}
@@ -505,11 +524,11 @@ func (d *DriveAdapter) CreateFolderByAccount(ctx context.Context, userID, accoun
 	if err != nil {
 		return nil, err
 	}
-	created, err := service.Files.Create(&drive.File{
-		Name:     name,
-		MimeType: "application/vnd.google-apps.folder",
-		Parents:  []string{parentID},
-	}).Fields("id,name,createdTime,modifiedTime,parents,webViewLink").Do()
+	folder := &drive.File{Name: name, MimeType: "application/vnd.google-apps.folder"}
+	if parentID != "" {
+		folder.Parents = []string{parentID}
+	}
+	created, err := service.Files.Create(folder).Context(ctx).Fields("id,name,createdTime,modifiedTime,parents,webViewLink").Do()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create folder: %w", err)
 	}
@@ -518,6 +537,64 @@ func (d *DriveAdapter) CreateFolderByAccount(ctx context.Context, userID, accoun
 		CreatedTime: parseTime(created.CreatedTime), ModifiedTime: parseTime(created.ModifiedTime),
 		Parents: created.Parents, WebViewLink: created.WebViewLink,
 	}, nil
+}
+
+// UpdateFileByAccount заменяет содержимое существующего файла
+func (d *DriveAdapter) UpdateFileByAccount(ctx context.Context, userID, accountID, fileID, localPath string) (*GoogleDriveFile, error) {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(localPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	updated, err := service.Files.Update(fileID, &drive.File{}).Context(ctx).Media(f).Fields(byAccountFileFields).Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to update: %w", err)
+	}
+	return d.convertDriveFile(updated), nil
+}
+
+// TrashFileByAccount перемещает файл в корзину (восстанавливается в течение 30 дней)
+func (d *DriveAdapter) TrashFileByAccount(ctx context.Context, userID, accountID, fileID string) error {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return err
+	}
+	if _, err := service.Files.Update(fileID, &drive.File{Trashed: true}).Context(ctx).Fields("id").Do(); err != nil {
+		return fmt.Errorf("failed to trash: %w", err)
+	}
+	return nil
+}
+
+// CheckAccount проверяет, что для аккаунта есть рабочий токен, и (если задана)
+// что folderID — существующая папка
+func (d *DriveAdapter) CheckAccount(ctx context.Context, userID, accountID, folderID string) error {
+	service, err := d.getDriveServiceByAccount(ctx, userID, accountID)
+	if err != nil {
+		return err
+	}
+	if _, err := service.About.Get().Context(ctx).Fields("user(emailAddress)").Do(); err != nil {
+		return fmt.Errorf("google drive is not accessible for account %s: %w", accountID, err)
+	}
+	if folderID == "" || folderID == "root" {
+		return nil
+	}
+	folder, err := service.Files.Get(folderID).Context(ctx).Fields("id,mimeType,trashed").Do()
+	if err != nil {
+		return fmt.Errorf("folder %s not found: %w", folderID, err)
+	}
+	if folder.MimeType != "application/vnd.google-apps.folder" || folder.Trashed {
+		return fmt.Errorf("%s is not an active folder", folderID)
+	}
+	return nil
+}
+
+// escapeQuery экранирует строку для подстановки в Drive query в одинарных кавычках
+func escapeQuery(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(s)
 }
 
 // IsRetryableError проверяет можно ли повторить запрос

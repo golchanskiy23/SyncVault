@@ -89,6 +89,17 @@ type Config struct {
 		RetryDelay time.Duration `json:"retryDelay" yaml:"retryDelay"`
 	} `json:"lock" yaml:"lock"`
 
+	Sync struct {
+		// Interval — период фоновой синхронизации всех узлов ("1h", "30m").
+		// Пусто — 1h, "0" или "off" — фоновая синхронизация выключена.
+		Interval string `json:"interval" yaml:"interval"`
+		// AgentToken — общий секрет агентов (cmd/agent) и сервера
+		AgentToken string `json:"agentToken" yaml:"agentToken"`
+		// LocalRoot — папка этого компьютера, внутри которой выбираются папки для связок
+		// (устройство "local"); пусто — устройство local выключено
+		LocalRoot string `json:"localRoot" yaml:"localRoot"`
+	} `json:"sync" yaml:"sync"`
+
 	MongoDB struct {
 		URI         string        `json:"uri" yaml:"uri"`
 		Database    string        `json:"database" yaml:"database"`
@@ -305,7 +316,7 @@ func LoadConfig() *Config {
 	cfg, err := LoadFromFile(configPath)
 	if err != nil {
 		log.Printf("Failed to load config from file %s: %v, using defaults", configPath, err)
-		return Default()
+		cfg = Default()
 	}
 
 	// Добавляем Redis адрес для удобства (если не установлен)
@@ -313,5 +324,58 @@ func LoadConfig() *Config {
 		cfg.Redis.Address = fmt.Sprintf("%s:%d", cfg.Redis.Host, cfg.Redis.Port)
 	}
 
+	applyEnvOverrides(cfg)
 	return cfg
+}
+
+// applyEnvOverrides позволяет переопределить адреса инфраструктуры через окружение
+// (например, в docker-compose, где сервисы доступны по именам контейнеров)
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("DB_HOST"); v != "" {
+		cfg.Database.Host = v
+	}
+	if v := os.Getenv("DB_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			cfg.Database.Port = port
+		}
+	}
+	if v := os.Getenv("DB_PASSWORD"); v != "" {
+		cfg.Database.Password = v
+	}
+	if v := os.Getenv("REDIS_ADDRESS"); v != "" {
+		cfg.Redis.Address = v
+	}
+	if v := os.Getenv("MONGODB_URI"); v != "" {
+		cfg.MongoDB.URI = v
+	}
+	if v := os.Getenv("SYNC_INTERVAL"); v != "" {
+		cfg.Sync.Interval = v
+	}
+	if v := os.Getenv("SYNC_AGENT_TOKEN"); v != "" {
+		cfg.Sync.AgentToken = v
+	}
+	if v := os.Getenv("SYNC_LOCAL_ROOT"); v != "" {
+		cfg.Sync.LocalRoot = v
+	}
+}
+
+// DefaultSyncInterval — период фоновой синхронизации, если он не задан
+const DefaultSyncInterval = time.Hour
+
+// SyncInterval возвращает период фоновой синхронизации; 0 — выключена
+func (c *Config) SyncInterval() (time.Duration, error) {
+	switch c.Sync.Interval {
+	case "":
+		return DefaultSyncInterval, nil
+	case "0", "off":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.Sync.Interval)
+	if err != nil {
+		return 0, fmt.Errorf("invalid sync.interval %q: %w", c.Sync.Interval, err)
+	}
+	if d < time.Minute {
+		return 0, fmt.Errorf("sync.interval %s is too short (minimum 1m)", d)
+	}
+	return d, nil
 }
