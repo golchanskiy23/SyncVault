@@ -1,0 +1,25 @@
+# Агент SyncVault для другого Linux-устройства/сервера.
+# Запуск (из корня репозитория на этом устройстве):
+#   cp deploy/agent/.env.example deploy/agent/.env   # и заполнить
+#   docker compose -f deploy/agent/docker-compose.yml up -d --build
+services:
+  agent:
+    build:
+      context: ../..
+      args:
+        SERVICE_NAME: agent
+    container_name: syncvault-agent
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "${AGENT_PORT:-9100}:${AGENT_PORT:-9100}"
+    environment:
+      AGENT_ID: ${AGENT_ID:?AGENT_ID is required}
+      AGENT_ROOT: ${AGENT_DATA_DIR}
+      AGENT_PORT: ${AGENT_PORT:-9100}
+      AGENT_SERVER: ${AGENT_SERVER:?AGENT_SERVER is required}
+      AGENT_TOKEN: ${AGENT_TOKEN:?AGENT_TOKEN is required}
+      AGENT_ADVERTISE: ${AGENT_ADVERTISE:-}
+    volumes:
+      # Монтируется по тому же пути — в связках указываются обычные пути этого устройства
+      - ${AGENT_DATA_DIR:?AGENT_DATA_DIR is required}:${AGENT_DATA_DIR}

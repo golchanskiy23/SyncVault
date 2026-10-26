@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,10 +34,11 @@ type AuthService struct {
 	authv1.UnimplementedAuthServiceServer
 	deviceManager *storage.DeviceManager
 	jwtService    *auth.JWTService
+	users         *auth.PgUserStore
 	config        *config.Config
 }
 
-func NewAuthService() *AuthService {
+func NewAuthService(users *auth.PgUserStore) *AuthService {
 	// Загружаем конфигурацию
 	cfg := config.LoadConfig()
 
@@ -57,6 +60,7 @@ func NewAuthService() *AuthService {
 	return &AuthService{
 		deviceManager: storage.NewDeviceManager(nil),
 		jwtService:    jwtService,
+		users:         users,
 		config:        cfg,
 	}
 }
@@ -64,35 +68,33 @@ func NewAuthService() *AuthService {
 func (s *AuthService) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {
 	log.Printf("Login attempt for user: %s", req.Email)
 
-	if req.Email == "test@example.com" && req.Password == "password123" {
-		userID := "user_123"
-		role := "user"
-
-		tokenPair, err := s.jwtService.GenerateTokenPair(ctx, userID, req.Email, role)
-		if err != nil {
-			log.Printf("Failed to generate tokens: %v", err)
-			return nil, fmt.Errorf("authentication failed")
+	user, err := s.users.Authenticate(ctx, req.Email, req.Password)
+	if err != nil {
+		if !errors.Is(err, auth.ErrUserNotFound) {
+			log.Printf("Login failed: %v", err)
 		}
-
-		return &authv1.LoginResponse{
-			AccessToken:  tokenPair.AccessToken,
-			RefreshToken: tokenPair.RefreshToken,
-			TokenType:    tokenPair.TokenType,
-			ExpiresIn:    int32(tokenPair.ExpiresIn),
-			User: &authv1.User{
-				UserId:    userID,
-				Email:     req.Email,
-				Username:  "testuser",
-				FirstName: "Test",
-				LastName:  "User",
-				IsActive:  true,
-				CreatedAt: timestamppb.Now(),
-				UpdatedAt: timestamppb.Now(),
-			},
-		}, nil
+		return nil, fmt.Errorf("invalid credentials")
 	}
 
-	return nil, fmt.Errorf("invalid credentials")
+	tokenPair, err := s.jwtService.GenerateTokenPair(ctx, user.ID, user.Email, user.Role)
+	if err != nil {
+		log.Printf("Failed to generate tokens: %v", err)
+		return nil, fmt.Errorf("authentication failed")
+	}
+
+	return &authv1.LoginResponse{
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		TokenType:    tokenPair.TokenType,
+		ExpiresIn:    int32(tokenPair.ExpiresIn),
+		User: &authv1.User{
+			UserId:    user.ID,
+			Email:     user.Email,
+			IsActive:  true,
+			CreatedAt: timestamppb.Now(),
+			UpdatedAt: timestamppb.Now(),
+		},
+	}, nil
 }
 
 func main() {
@@ -128,9 +130,7 @@ func main() {
 	jwtService := auth.NewJWTService(jwtConfig, rdb)
 
 	// Создаем security компоненты
-	// Bug 1.13 fix: import was "security" (non-existent), now "syncvault/internal/security"
-	// passwordHasher is available for use in login handler (hash/verify passwords from DB)
-	_ = security.NewPasswordHasher() // suppress unused warning; use in real DB auth flow
+	users := auth.NewPgUserStore(db)
 	validator := security.NewValidator()
 	rateLimiter := security.NewRateLimiter()
 
@@ -193,30 +193,59 @@ func main() {
 				return
 			}
 
-			if req["email"] == "test@example.com" && req["password"] == "password123" {
-				// В реальном приложении здесь должна быть проверка по базе данных
-				tokenPair, err := jwtService.GenerateTokenPair(context.Background(), "user_123", req["email"], "user")
-				if err != nil {
-					http.Error(w, "Authentication failed", http.StatusInternalServerError)
-					return
+			user, err := users.Authenticate(r.Context(), req["email"], req["password"])
+			if err != nil {
+				if !errors.Is(err, auth.ErrUserNotFound) {
+					log.Printf("Login failed: %v", err)
 				}
-
-				response := map[string]interface{}{
-					"access_token":  tokenPair.AccessToken,
-					"refresh_token": tokenPair.RefreshToken,
-					"token_type":    tokenPair.TokenType,
-					"expires_in":    tokenPair.ExpiresIn,
-					"user": map[string]interface{}{
-						"id":        "user_123",
-						"email":     req["email"],
-						"username":  "testuser",
-						"is_active": true,
-					},
-				}
-				json.NewEncoder(w).Encode(response)
-			} else {
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+				return
 			}
+			writeTokenResponse(w, r.Context(), jwtService, user)
+		})
+
+		// Регистрация пользователя
+		router.Post("/register", func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+
+			username := req["username"]
+			if username == "" {
+				username = req["email"]
+			}
+			registerData := struct {
+				Email    string `validate:"required,email,max=255"`
+				Username string `validate:"required,max=50"`
+				Password string `validate:"required"`
+			}{
+				Email:    req["email"],
+				Username: username,
+				Password: req["password"],
+			}
+			if err := validator.ValidateStruct(registerData); err != nil {
+				http.Error(w, "Validation failed: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			user, err := users.CreateUser(r.Context(), registerData.Email, registerData.Username, registerData.Password)
+			switch {
+			case errors.Is(err, auth.ErrUserExists):
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			case err != nil && strings.HasPrefix(err.Error(), "password must"):
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			case err != nil:
+				log.Printf("Register failed: %v", err)
+				http.Error(w, "Registration failed", http.StatusInternalServerError)
+				return
+			}
+
+			w.WriteHeader(http.StatusCreated)
+			writeTokenResponse(w, r.Context(), jwtService, user)
 		})
 
 		// Token validation endpoint
@@ -240,10 +269,9 @@ func main() {
 			response := map[string]interface{}{
 				"valid": true,
 				"user": map[string]interface{}{
-					"id":        claims.UserID,
-					"email":     claims.Email,
-					"username":  "testuser",
-					"is_active": true,
+					"id":    claims.UserID,
+					"email": claims.Email,
+					"role":  claims.Role,
 				},
 			}
 			json.NewEncoder(w).Encode(response)
@@ -281,11 +309,16 @@ func main() {
 					return
 				}
 
+				user, err := users.GetUserByID(r.Context(), userID)
+				if err != nil {
+					http.Error(w, "User not found", http.StatusNotFound)
+					return
+				}
+
 				response := map[string]interface{}{
-					"id":        userID,
-					"email":     "test@example.com",
-					"username":  "testuser",
-					"is_active": true,
+					"id":    user.ID,
+					"email": user.Email,
+					"role":  user.Role,
 				}
 				json.NewEncoder(w).Encode(response)
 			})
@@ -331,7 +364,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Регистрируем сервисы
-	authService := NewAuthService()
+	authService := NewAuthService(users)
 	authv1.RegisterAuthServiceServer(grpcServer, authService)
 
 	// Включаем reflection для разработки
@@ -381,4 +414,25 @@ func main() {
 	case <-stopped:
 		log.Println("Auth Service stopped gracefully")
 	}
+}
+
+// writeTokenResponse выдаёт пару JWT для пользователя
+func writeTokenResponse(w http.ResponseWriter, ctx context.Context, jwtService *auth.JWTService, user *auth.UserInfo) {
+	tokenPair, err := jwtService.GenerateTokenPair(ctx, user.ID, user.Email, user.Role)
+	if err != nil {
+		http.Error(w, "Authentication failed", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"access_token":  tokenPair.AccessToken,
+		"refresh_token": tokenPair.RefreshToken,
+		"token_type":    tokenPair.TokenType,
+		"expires_in":    tokenPair.ExpiresIn,
+		"user": map[string]interface{}{
+			"id":    user.ID,
+			"email": user.Email,
+			"role":  user.Role,
+		},
+	})
 }

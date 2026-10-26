@@ -1,6 +1,6 @@
 # SyncVault Makefile
 
-.PHONY: test test-middleware test-handlers test-integration test-coverage build run clean help
+.PHONY: test test-middleware test-handlers test-integration test-coverage build run clean help agent
 
 # Переменные
 BINARY_NAME=syncvault
@@ -41,6 +41,13 @@ build:
 	@echo "🔨 Building application..."
 	go build -o $(BINARY_NAME) ./cmd/server
 	@echo "✅ Build completed: $(BINARY_NAME)"
+
+# Статические бинарники агента для Linux-устройств (bin/syncvault-agent-<arch>)
+agent:
+	@echo "🔨 Building agent..."
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/syncvault-agent-amd64 ./cmd/agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/syncvault-agent-arm64 ./cmd/agent
+	@echo "✅ Agent built: bin/syncvault-agent-amd64, bin/syncvault-agent-arm64"
 
 # Запуск приложения
 run:

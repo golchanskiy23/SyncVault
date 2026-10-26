@@ -4,7 +4,22 @@
 #  apache/kafka:latest
 
 
-version: '3.8'
+# Запуск: docker compose up -d          — сервер синхронизации (postgres, redis, auth, oauth)
+#         docker compose --profile extra up -d — плюс api-gateway, sync-service, mongodb
+# Настройки — в .env (см. .env.example) и internal/config/config.yml.
+#
+# config.yml монтируется в каждый сервис; адреса инфраструктуры
+# переопределяются через окружение (DB_HOST, REDIS_ADDRESS, MONGODB_URI)
+x-app-config: &app-config
+  CONFIG_PATH: /app/config.yml
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_PASSWORD: postgres123
+  REDIS_ADDRESS: redis:6379
+  MONGODB_URI: mongodb://admin:admin123@mongodb:27017
+
+x-app-volumes: &app-volumes
+  - ./internal/config/config.yml:/app/config.yml:ro
 
 services:
   postgres:
@@ -15,11 +30,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres123
       POSTGRES_HOST_AUTH_METHOD: trust
-    ports:
-      - "5432:5432"
+    # Порт наружу не публикуется — нет конфликта с локальным PostgreSQL.
+    # Консоль: docker compose exec postgres psql -U postgres -d syncvault
+    restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
     networks:
       - syncvault-network
     healthcheck:
@@ -31,8 +46,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: syncvault-redis
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
     volumes:
       - redis_data:/data
     networks:
@@ -46,12 +60,11 @@ services:
   mongodb:
     image: mongo:6
     container_name: syncvault-mongodb
+    profiles: [extra]
     environment:
       MONGO_INITDB_DATABASE: syncvault_audit
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: admin123
-    ports:
-      - "27017:27017"
     volumes:
       - mongodb_data:/data/db
     networks:
@@ -61,6 +74,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Применяет миграции (tools/migrate up) при каждом запуске и завершается
+  migrate:
+    build:
+      context: .
+      args:
+        SERVICE_NAME: migrate
+        SERVICE_PATH: tools/migrate
+    container_name: syncvault-migrate
+    command: ["up"]
+    working_dir: /
+    environment:
+      DATABASE_URL: postgres://postgres:postgres123@postgres:5432/syncvault?sslmode=disable
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - syncvault-network
 
   # Prometheus для мониторинга
 #  prometheus:
@@ -98,13 +131,16 @@ services:
       args:
         SERVICE_NAME: auth-service
     container_name: syncvault-auth
+    restart: unless-stopped
     ports:
       - "50056:50056"
     environment:
-      - AUTH_SERVICE_PORT=50056
+      <<: *app-config
+      AUTH_SERVICE_PORT: "50056"
+    volumes: *app-volumes
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -116,10 +152,13 @@ services:
       args:
         SERVICE_NAME: sync-service
     container_name: syncvault-sync
+    profiles: [extra]
     ports:
       - "50053:50053"
     environment:
-      - SYNC_SERVICE_PORT=50053
+      <<: *app-config
+      SYNC_SERVICE_PORT: "50053"
+    volumes: *app-volumes
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,8 +171,14 @@ services:
       args:
         SERVICE_NAME: api-gateway
     container_name: syncvault-gateway
+    profiles: [extra]
     ports:
       - "8080:8080"
+    environment:
+      <<: *app-config
+      AUTH_SERVICE_URL: http://auth-service:50056
+      SYNC_SERVICE_URL: http://sync-service:50053
+    volumes: *app-volumes
     depends_on:
       - auth-service
       - sync-service
@@ -146,12 +191,24 @@ services:
       args:
         SERVICE_NAME: oauth-service
     container_name: syncvault-oauth
+    restart: unless-stopped
+    # Файлы в синхронизируемых папках создаются от вашего пользователя, а не от root
+    user: "${UID:-1000}:${GID:-1000}"
     ports:
-      - "50057:50057"
+      - "8081:8081"
     environment:
-      - OAUTH_SERVICE_PORT=50057
+      <<: *app-config
+      OAUTH_SERVICE_PORT: "8081"
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-}
+      SYNC_LOCAL_ROOT: ${SYNC_LOCAL_ROOT:?SYNC_LOCAL_ROOT is required (see .env.example)}
+    volumes:
+      - ./internal/config/config.yml:/app/config.yml:ro
+      # Папка компьютера для связок монтируется по тому же пути — в связках указываются обычные пути
+      - ${SYNC_LOCAL_ROOT}:${SYNC_LOCAL_ROOT}
     depends_on:
-      postgres:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
     networks:
       - syncvault-network

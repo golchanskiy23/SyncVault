@@ -196,7 +196,7 @@ func (dl *DistributedLock) IsLocked(ctx context.Context) (bool, error) {
 
 // GetTTL returns the remaining TTL of the lock
 func (dl *DistributedLock) GetTTL(ctx context.Context) (time.Duration, error) {
-	ttl, err := dl.rdb.TTL(ctx, dl.key).Result()
+	ttl, err := dl.rdb.PTTL(ctx, dl.key).Result()
 	if err != nil {
 		return 0, fmt.Errorf("failed to get lock TTL: %w", err)
 	}

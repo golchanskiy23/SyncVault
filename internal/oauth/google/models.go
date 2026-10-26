@@ -157,6 +157,8 @@ type GoogleDriveFile struct {
 	Parents     []string  `json:"parents"`
 	WebViewLink string    `json:"webViewLink"`
 	DownloadURL string    `json:"downloadUrl,omitempty"`
+	// Sha256Checksum есть только у бинарных файлов (не у Google Docs)
+	Sha256Checksum string `json:"sha256Checksum,omitempty"`
 }
 
 // GoogleDriveFolder представляет папку в Google Drive

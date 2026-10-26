@@ -5,5 +5,12 @@
 # VS Code settings
 .vscode/
 
+.kiro
+
 # Secrets — use config.example.yml as template
 internal/config/config.yml
+
+# Локальные настройки docker compose и данные по умолчанию
+.env
+data/
+bin/

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -29,6 +30,9 @@ func NewRateLimiter(rdb *redis.Client) *RateLimiter {
 		prefix: "rate_limit:",
 	}
 }
+
+// requestSeq делает member в sorted set уникальным для запросов в одну миллисекунду
+var requestSeq atomic.Uint64
 
 func (rl *RateLimiter) key(identifier string) string {
 	return rl.prefix + identifier
@@ -70,6 +74,7 @@ func (rl *RateLimiter) SlidingWindowRateLimit(
 		local window_start = tonumber(ARGV[2])
 		local limit = tonumber(ARGV[3])
 		local window_ms = tonumber(ARGV[4])
+		local member = ARGV[5]
 		
 		-- Remove expired entries
 		redis.call('ZREMRANGEBYSCORE', key, 0, window_start)
@@ -98,7 +103,7 @@ func (rl *RateLimiter) SlidingWindowRateLimit(
 		end
 		
 		-- Add current request
-		redis.call('ZADD', key, now, now)
+		redis.call('ZADD', key, now, member)
 		redis.call('EXPIRE', key, math.ceil(window_ms / 1000) + 1)
 		
 		return {
@@ -110,7 +115,8 @@ func (rl *RateLimiter) SlidingWindowRateLimit(
 	`
 
 	result, err := rl.rdb.Eval(ctx, script, []string{key},
-		now, windowStart, limit, window.Milliseconds()).Result()
+		now, windowStart, limit, window.Milliseconds(),
+		fmt.Sprintf("%d-%d", time.Now().UnixNano(), requestSeq.Add(1))).Result()
 	if err != nil {
 		return nil, fmt.Errorf("rate limit script execution failed: %w", err)
 	}

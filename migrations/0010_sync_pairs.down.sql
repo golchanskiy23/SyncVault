@@ -1,0 +1,2 @@
+ALTER TABLE sync_nodes DROP COLUMN IF EXISTS root;
+DROP TABLE IF EXISTS sync_pairs;

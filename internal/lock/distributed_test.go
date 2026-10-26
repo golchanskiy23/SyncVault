@@ -384,8 +384,8 @@ func TestDistributedLock_TTLExpiration(t *testing.T) {
 	_, err := lock.Acquire(ctx, opts)
 	require.NoError(t, err)
 
-	// Wait for expiration
-	time.Sleep(100 * time.Millisecond)
+	// miniredis не истекает ключи по реальному времени — сдвигаем часы вручную
+	mr.FastForward(100 * time.Millisecond)
 
 	// Lock should be expired
 	isLocked, err := lock.IsLocked(ctx)

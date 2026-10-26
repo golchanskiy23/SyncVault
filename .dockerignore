@@ -1,0 +1,5 @@
+.git
+.kiro
+.vscode
+internal/config/config.yml
+*.out

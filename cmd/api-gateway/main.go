@@ -22,13 +22,20 @@ import (
 	"syncvault/internal/config"
 )
 
-const (
-	AuthServiceURL         = "http://localhost:50056"
-	StorageServiceURL      = "http://localhost:50054"
-	SyncServiceURL         = "http://localhost:50053"
-	FileServiceURL         = "http://localhost:50052"
-	NotificationServiceURL = "http://localhost:50055"
+var (
+	AuthServiceURL         = envOr("AUTH_SERVICE_URL", "http://localhost:50056")
+	StorageServiceURL      = envOr("STORAGE_SERVICE_URL", "http://localhost:50054")
+	SyncServiceURL         = envOr("SYNC_SERVICE_URL", "http://localhost:50053")
+	FileServiceURL         = envOr("FILE_SERVICE_URL", "http://localhost:50052")
+	NotificationServiceURL = envOr("NOTIFICATION_SERVICE_URL", "http://localhost:50055")
 )
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // Circuit Breaker состояния
 type CircuitState int
